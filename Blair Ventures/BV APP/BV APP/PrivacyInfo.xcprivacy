@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+
+    <!-- ── Tracking ─────────────────────────────────────────────────────────── -->
+    <!-- Aski IQ does not track users across apps or websites. -->
+    <key>NSPrivacyTracking</key>
+    <false/>
+    <key>NSPrivacyTrackingDomains</key>
+    <array/>
+
+    <!-- ── Collected Data Types ──────────────────────────────────────────────
+         Describes every category of data the app collects and why.
+         "Linked" = data is associated with the user's identity on the server.
+         "Tracking" = data is used to track users across apps/websites (always false).
+    ─────────────────────────────────────────────────────────────────────────── -->
+    <key>NSPrivacyCollectedDataTypes</key>
+    <array>
+
+        <!-- Name — employee / contact records stored in Supabase, linked to account -->
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypeName</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <true/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
+
+        <!-- Email Address — employee / CRM contact records, stored in Supabase -->
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypeEmailAddress</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <true/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
+
+        <!-- Phone Number — employee / CRM contact records, stored in Supabase -->
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypePhoneNumber</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <true/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
+
+        <!-- Precise Location — one-time lookup per session, sent to Open-Meteo
+             weather API to populate dashboard and field form weather blocks.
+             Location is NOT stored on the server and NOT linked to the user. -->
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypePreciseLocation</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
+
+        <!-- Photos or Videos — user-selected photos attached to safety forms,
+             incident reports, daily job reports, and employee certifications.
+             Photos are stored in the app container only (never synced to the server)
+             and are NOT linked to a server-side user identity. -->
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypePhotosOrVideos</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
+
+        <!-- Other User Content — free-text field entries, form responses, incident
+             descriptions, and RFI questions entered by the user. Content is
+             stored in Supabase linked to the authenticated user's company account. -->
+        <dict>
+            <key>NSPrivacyCollectedDataType</key>
+            <string>NSPrivacyCollectedDataTypeOtherUserContent</string>
+            <key>NSPrivacyCollectedDataTypeLinked</key>
+            <true/>
+            <key>NSPrivacyCollectedDataTypeTracking</key>
+            <false/>
+            <key>NSPrivacyCollectedDataTypePurposes</key>
+            <array>
+                <string>NSPrivacyCollectedDataTypePurposeAppFunctionality</string>
+            </array>
+        </dict>
+
+    </array>
+
+    <!-- ── Required Reason APIs ──────────────────────────────────────────────
+         Declares every Apple "required reason" API category the app accesses.
+    ─────────────────────────────────────────────────────────────────────────── -->
+    <key>NSPrivacyAccessedAPITypes</key>
+    <array>
+
+        <!-- User Defaults — stores app settings, module state, and offline-first
+             data queues. All data is used only within the app on this device.
+             Reason CA92.1: Read/write data used only within the app on-device. -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>CA92.1</string>
+            </array>
+        </dict>
+
+        <!-- File Timestamp / Size APIs — used when displaying the size of attached
+             documents (PDFs, exports) generated or stored in the app container.
+             APIs: FileManager.attributesOfItem, URL.resourceValues(fileSizeKey).
+             Reason C617.1: Access metadata of files inside the app container
+             required by the app's primary functionality. -->
+        <dict>
+            <key>NSPrivacyAccessedAPIType</key>
+            <string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+            <key>NSPrivacyAccessedAPITypeReasons</key>
+            <array>
+                <string>C617.1</string>
+            </array>
+        </dict>
+
+    </array>
+
+</dict>
+</plist>

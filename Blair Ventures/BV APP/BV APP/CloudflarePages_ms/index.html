@@ -1,0 +1,475 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Acceptance — Aski IQ</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 32px 16px;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: #f5f5f7;
+    color: #1d1d1f;
+    line-height: 1.5;
+    min-height: 100vh;
+  }
+  .card {
+    max-width: 640px;
+    margin: 0 auto;
+    background: white;
+    border-radius: 14px;
+    padding: 36px 28px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.06), 0 8px 24px rgba(0,0,0,.04);
+  }
+  h1 { font-size: 26px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  .subhead { color: #6b6b70; font-size: 15px; margin-bottom: 28px; }
+  .row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 12px 0; border-bottom: 1px solid #ececef; font-size: 15px;
+  }
+  .row:last-child { border-bottom: none; }
+  .row .label { color: #6b6b70; }
+  .row .value { font-weight: 600; }
+  .total {
+    background: #f8f8fa; padding: 18px 20px; border-radius: 10px;
+    font-size: 19px; font-weight: 600;
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin: 18px 0 24px;
+  }
+  .scope {
+    background: #f8f8fa; padding: 16px 18px; border-radius: 10px;
+    font-size: 14.5px; margin: 16px 0 22px; white-space: pre-wrap;
+    color: #3a3a3c;
+  }
+  .field { margin: 16px 0 0; }
+  label.label-text { display: block; font-size: 13px; color: #444; margin: 0 0 6px; font-weight: 500; }
+  input[type=text], input[type=email] {
+    width: 100%; padding: 13px 14px; font-size: 16px;
+    border: 1px solid #d2d2d7; border-radius: 9px;
+    -webkit-appearance: none; appearance: none; background: white;
+    transition: border-color .15s;
+  }
+  input:focus { outline: none; border-color: #0070f3; }
+  canvas {
+    width: 100%; height: 170px; background: #fafafa;
+    border: 1px dashed #c7c7cc; border-radius: 9px; touch-action: none;
+    display: block;
+  }
+  .btn {
+    width: 100%; padding: 15px; font-size: 16px; font-weight: 600;
+    background: #0070f3; color: white; border: none; border-radius: 9px;
+    cursor: pointer; margin-top: 22px;
+    transition: background .15s, opacity .15s;
+  }
+  .btn:hover:not(:disabled) { background: #005ad1; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-clear {
+    background: none; color: #0070f3; border: none; font-size: 14px;
+    cursor: pointer; padding: 8px 0; margin: 4px 0 0;
+  }
+  .err {
+    color: #c0392b; font-size: 14px; margin-top: 14px;
+    padding: 12px 14px; background: #fdecea; border-radius: 8px;
+    display: none;
+  }
+  .err.show { display: block; }
+  .icon {
+    font-size: 56px; text-align: center; margin: 8px 0 12px;
+    line-height: 1;
+  }
+  .footer {
+    text-align: center; color: #8e8e93; font-size: 12px; margin-top: 24px;
+  }
+  .loading {
+    text-align: center; padding: 40px 20px; color: #6b6b70;
+  }
+  .skeleton-line {
+    height: 14px; background: #ececef; border-radius: 4px; margin: 8px auto;
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: .5; }
+  }
+  .status-message { text-align: center; padding: 20px 0; }
+  .status-message h1 { margin-bottom: 12px; }
+  .status-message p { color: #6b6b70; }
+</style>
+</head>
+<body>
+  <div class="card" id="root">
+    <!-- Initial loading state — replaced by JS once data loads -->
+    <div class="loading" id="loading">
+      <div class="skeleton-line" style="width: 60%;"></div>
+      <div class="skeleton-line" style="width: 40%;"></div>
+      <div class="skeleton-line" style="width: 80%;"></div>
+      <p style="margin-top: 16px;" id="loadingLabel">Loading…</p>
+    </div>
+  </div>
+  <div class="footer">Powered by Aski IQ</div>
+
+<script>
+(() => {
+  // ─── PATH-BASED DISPATCH ─────────────────────────────────────────────────
+  // One page handles both /q (quotes) and /ms (material sales / rentals /
+  // direct invoices). This keeps a single Cloudflare Pages project but
+  // lets the iOS app mint distinct URLs that map to distinct Edge Functions.
+  // The /q quote flow is byte-identical to the previous deployment —
+  // only the new /ms branch was added.
+  const path  = (window.location.pathname || "/").toLowerCase();
+  const isMS  = path.startsWith("/ms");
+  const KIND  = isMS ? "material_sale" : "quote";
+
+  // ─── CONFIG ────────────────────────────────────────────────────────────────
+  // Supabase project — keep in sync with the iOS app's `supabase` client.
+  const SUPABASE_URL = "https://uiwjvkutaezyismkjwxj.supabase.co";
+  // Publishable key is required by Supabase Edge Function infrastructure
+  // even when the function itself has verify_jwt:false. It's a public key
+  // by design — safe to ship in client-side code.
+  // If you rotate keys in Supabase Dashboard, update this string and
+  // redeploy this page (Cloudflare Pages picks up the new commit/upload).
+  const SUPABASE_ANON_KEY = "sb_publishable_fwT2RGuFirNsfKSF0tEBLg_LTpSv8uG";
+
+  const ENDPOINT = isMS
+    ? `${SUPABASE_URL}/functions/v1/material-sale-accept`
+    : `${SUPABASE_URL}/functions/v1/quote-accept`;
+
+  // Document label per saleType — used in headings, button text, and copy.
+  // Matches MaterialSalePDFRenderer.badgeForSaleType() in iOS.
+  function docLabelFor(saleType) {
+    switch (saleType) {
+      case "project_work":   return "Project Quote";
+      case "service_work":   return "Service Quote";
+      case "material_sale":  return "Material Sale";
+      case "rental":         return "Rental Agreement";
+      case "direct_invoice": return "Invoice";
+      default:               return isMS ? "Material Sale" : "Quote";
+    }
+  }
+
+  // ─── STATE ─────────────────────────────────────────────────────────────────
+  const params = new URLSearchParams(window.location.search);
+  const TOKEN  = params.get("token") || "";
+  const root   = document.getElementById("root");
+
+  // Update loading label once on boot — gives correct copy before the
+  // first fetch returns.
+  const loadingLabel = document.getElementById("loadingLabel");
+  if (loadingLabel) {
+    loadingLabel.textContent = isMS ? "Loading…" : "Loading quote…";
+  }
+  // Update tab title pre-fetch.
+  document.title = isMS ? "Acceptance — Aski IQ" : "Accept Quote — Aski IQ";
+
+  // ─── HELPERS ───────────────────────────────────────────────────────────────
+  function escapeHtml(s) {
+    return String(s ?? "")
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function fmtCurrency(n) {
+    try {
+      return new Intl.NumberFormat("en-US", {
+        style: "currency", currency: "USD",
+        minimumFractionDigits: 2, maximumFractionDigits: 2
+      }).format(Number(n) || 0);
+    } catch (_) { return "$" + (Number(n) || 0).toFixed(2); }
+  }
+  function fmtDate(iso) {
+    if (!iso) return "";
+    try {
+      return new Date(iso).toLocaleString("en-US", {
+        year: "numeric", month: "short", day: "numeric",
+        hour: "numeric", minute: "2-digit"
+      });
+    } catch (_) { return iso; }
+  }
+  async function api(method, body) {
+    const url = method === "GET"
+      ? `${ENDPOINT}?token=${encodeURIComponent(TOKEN)}`
+      : ENDPOINT;
+    const res = await fetch(url, {
+      method,
+      headers: {
+        "Content-Type": "application/json",
+        "apikey":        SUPABASE_ANON_KEY,
+        "Authorization": "Bearer " + SUPABASE_ANON_KEY,
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    let json = null;
+    try { json = await res.json(); } catch (_) {}
+    return { ok: res.ok, status: res.status, body: json };
+  }
+
+  // ─── RENDER STATES ─────────────────────────────────────────────────────────
+  function renderError(title, message, icon = "⚠️") {
+    root.innerHTML = `
+      <div class="status-message">
+        <div class="icon">${icon}</div>
+        <h1>${escapeHtml(title)}</h1>
+        <p>${escapeHtml(message)}</p>
+      </div>`;
+  }
+
+  function renderAccepted(label, number, company, when) {
+    const heading = "Already accepted";
+    const body = `${escapeHtml(label)} ${escapeHtml(number)} from ${escapeHtml(company)} was accepted on ${escapeHtml(fmtDate(when))}.`;
+    root.innerHTML = `
+      <div class="status-message">
+        <div class="icon">✅</div>
+        <h1>${heading}</h1>
+        <p>${body}</p>
+        <p style="margin-top:12px;">Thanks again — we'll be in touch.</p>
+      </div>`;
+  }
+
+  function renderConfirmation() {
+    root.innerHTML = `
+      <div class="status-message">
+        <div class="icon">✅</div>
+        <h1>Thanks!</h1>
+        <p>We've recorded your acceptance. The team will be in touch shortly.</p>
+      </div>`;
+  }
+
+  /**
+   * Renders the acceptance form. `data` shape varies by KIND:
+   *   quote:         { company_name, quote_number,  client_name, scope_summary, subtotal }
+   *   material_sale: { company_name, sale_number, sale_type, doc_label, client_name, delivery_address, grand_total }
+   * Both use the same UI scaffolding — only the field labels and the
+   * total/summary rows adapt.
+   */
+  function renderForm(data) {
+    const company = escapeHtml(data.company_name);
+    const client  = escapeHtml(data.client_name);
+
+    // Per-KIND label, number, summary, total, button text.
+    let label, number, summaryHTML, totalLabel, totalValue, buttonText;
+
+    if (isMS) {
+      label      = data.doc_label || docLabelFor(data.sale_type);
+      number     = escapeHtml(data.sale_number);
+      totalLabel = "Total";
+      totalValue = escapeHtml(fmtCurrency(data.grand_total));
+      buttonText = `Accept ${escapeHtml(label)}`;
+
+      const deliveryRow = data.delivery_address
+        ? `<div class="row"><span class="label">Delivery</span><span class="value">${escapeHtml(data.delivery_address)}</span></div>`
+        : "";
+      summaryHTML = `
+        <div class="row"><span class="label">${escapeHtml(label)} number</span><span class="value">${number}</span></div>
+        <div class="row"><span class="label">Bill to</span><span class="value">${client}</span></div>
+        ${deliveryRow}
+      `;
+    } else {
+      label      = "Quote";
+      number     = escapeHtml(data.quote_number);
+      totalLabel = "Total";
+      totalValue = escapeHtml(fmtCurrency(data.subtotal));
+      buttonText = "Accept Quote";
+
+      const scope = escapeHtml(data.scope_summary);
+      const scopeBlock = scope ? `<div class="scope">${scope}</div>` : "";
+      summaryHTML = `
+        ${scopeBlock}
+        <div class="row"><span class="label">Quote number</span><span class="value">${number}</span></div>
+        <div class="row"><span class="label">Prepared for</span><span class="value">${client}</span></div>
+      `;
+    }
+
+    root.innerHTML = `
+      <h1>Accept ${escapeHtml(label)} ${number}</h1>
+      <div class="subhead">From ${company} — prepared for ${client}</div>
+
+      ${summaryHTML}
+      <div class="total"><span>${totalLabel}</span><span>${totalValue}</span></div>
+
+      <form id="f">
+        <div class="field">
+          <label class="label-text" for="name">Your full name</label>
+          <input id="name" type="text" autocomplete="name" required>
+        </div>
+        <div class="field">
+          <label class="label-text" for="email">Your email</label>
+          <input id="email" type="email" autocomplete="email" required>
+        </div>
+        <div class="field">
+          <label class="label-text">Sign here</label>
+          <canvas id="sig" width="600" height="170"></canvas>
+          <button type="button" class="btn-clear" id="clear">Clear signature</button>
+        </div>
+        <button type="submit" class="btn" id="go">${buttonText}</button>
+        <div class="err" id="err"></div>
+      </form>`;
+
+    wireSignaturePad();
+    wireForm(buttonText);
+  }
+
+  // ─── SIGNATURE CANVAS ──────────────────────────────────────────────────────
+  let hasInk = false;
+  function wireSignaturePad() {
+    const c   = document.getElementById("sig");
+    const ctx = c.getContext("2d");
+    let drawing = false, last = null;
+
+    function resize() {
+      const r   = c.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      c.width   = r.width * dpr;
+      c.height  = 170 * dpr;
+      ctx.scale(dpr, dpr);
+      ctx.lineWidth   = 2;
+      ctx.lineCap     = "round";
+      ctx.strokeStyle = "#1d1d1f";
+    }
+    function pos(e) {
+      const r = c.getBoundingClientRect();
+      const t = e.touches ? e.touches[0] : e;
+      return { x: t.clientX - r.left, y: t.clientY - r.top };
+    }
+    function start(e) { e.preventDefault(); drawing = true; last = pos(e); }
+    function move(e) {
+      if (!drawing) return;
+      e.preventDefault();
+      const p = pos(e);
+      ctx.beginPath();
+      ctx.moveTo(last.x, last.y);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
+      last = p; hasInk = true;
+    }
+    function end() { drawing = false; }
+
+    resize();
+    window.addEventListener("resize", () => {
+      ctx.clearRect(0, 0, c.width, c.height); resize(); hasInk = false;
+    });
+
+    c.addEventListener("mousedown",  start);
+    c.addEventListener("mousemove",  move);
+    c.addEventListener("mouseup",    end);
+    c.addEventListener("mouseleave", end);
+    c.addEventListener("touchstart", start);
+    c.addEventListener("touchmove",  move);
+    c.addEventListener("touchend",   end);
+
+    document.getElementById("clear").onclick = () => {
+      ctx.clearRect(0, 0, c.width, c.height);
+      hasInk = false;
+    };
+  }
+
+  // ─── FORM SUBMIT ───────────────────────────────────────────────────────────
+  function wireForm(buttonText) {
+    const form  = document.getElementById("f");
+    const errEl = document.getElementById("err");
+    const btn   = document.getElementById("go");
+
+    function showError(msg) {
+      errEl.textContent = msg;
+      errEl.classList.add("show");
+    }
+    function clearError() {
+      errEl.textContent = "";
+      errEl.classList.remove("show");
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      clearError();
+
+      const name  = document.getElementById("name").value.trim();
+      const email = document.getElementById("email").value.trim();
+
+      if (!name)  { showError("Please enter your name.");  return; }
+      if (!email) { showError("Please enter your email."); return; }
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+        showError("That doesn't look like a valid email."); return;
+      }
+      if (!hasInk) { showError("Please sign in the box above."); return; }
+
+      const sig = document.getElementById("sig").toDataURL("image/png");
+
+      btn.disabled    = true;
+      btn.textContent = "Submitting…";
+
+      try {
+        const { ok, body } = await api("POST", { token: TOKEN, name, email, signature: sig });
+        if (ok && body && body.ok) {
+          renderConfirmation();
+          return;
+        }
+        showError((body && body.error) || "Something went wrong. Please try again.");
+        btn.disabled    = false;
+        btn.textContent = buttonText;
+      } catch (err) {
+        showError("Network error. Please check your connection and try again.");
+        btn.disabled    = false;
+        btn.textContent = buttonText;
+      }
+    });
+  }
+
+  // ─── BOOTSTRAP ─────────────────────────────────────────────────────────────
+  async function load() {
+    if (!TOKEN) {
+      renderError("Link not found",
+                  "This acceptance link is missing or malformed. If you got it from an email, double-check the URL or ask the sender to resend.");
+      return;
+    }
+
+    try {
+      const { status, body } = await api("GET");
+
+      if (status === 404 || (body && body.status === "not_found")) {
+        renderError("Link not found",
+                    "This acceptance link doesn't exist or was mistyped.");
+        return;
+      }
+
+      if (!body || !body.status) {
+        renderError("Server error",
+                    "Couldn't load this right now. Please try again in a minute.");
+        return;
+      }
+
+      switch (body.status) {
+        case "open":
+          renderForm(body);
+          return;
+        case "accepted": {
+          // Both shapes — quote uses quote_number, sale uses sale_number.
+          const num   = body.quote_number || body.sale_number || "";
+          const label = isMS ? (body.doc_label || docLabelFor(body.sale_type)) : "Quote";
+          renderAccepted(label, num, body.company_name, body.accepted_at);
+          return;
+        }
+        case "expired":
+          renderError("Link expired",
+                      `This acceptance link has expired. Please reach out to ${body.company_name || "the sender"} for a renewed ${isMS ? (body.doc_label || "document").toLowerCase() : "quote"}.`,
+                      "⏰");
+          return;
+        case "revoked":
+          renderError("Link revoked",
+                      `This acceptance link was revoked by ${body.company_name || "the sender"}. Please contact them for a new link.`,
+                      "🚫");
+          return;
+        default:
+          renderError("Unknown state",
+                      `We couldn't determine the status of this ${isMS ? "document" : "quote"}.`);
+      }
+    } catch (err) {
+      renderError("Network error",
+                  "Couldn't reach the server. Please check your connection and try again.");
+    }
+  }
+
+  load();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,96 @@
+# =============================================================================
+# Aski IQ — root .gitignore
+# =============================================================================
+
+# ---------- macOS ----------
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+.TemporaryItems
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# ---------- iCloud Drive placeholders ----------
+*.icloud
+.iCloud
+.~lock.*
+
+# ---------- Xcode ----------
+build/
+DerivedData/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+xcuserdata/
+**/xcuserdata/
+*.xcuserdatad/
+
+# Xcode user-specific scheme management (shared schemes ARE tracked)
+xcshareddata/xcschememanagement.plist
+
+# Xcode 26 / SwiftPM build cache inside .xcodeproj
+*.xcodeproj/xcshareddata/swiftpm/configuration/
+.swiftpm/
+.build/
+
+# ---------- Swift Package Manager ----------
+Packages/
+Package.pins
+.swiftpm/
+.build/
+
+# ---------- CocoaPods (not used today, but future-proof) ----------
+Pods/
+*.podspec.lock
+
+# ---------- Carthage (not used today, but future-proof) ----------
+Carthage/Build/
+Carthage/Checkouts/
+
+# ---------- Fastlane ----------
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output/
+
+# ---------- Playgrounds ----------
+timeline.xctimeline
+playground.xcworkspace
+
+# ---------- Environment / Secrets ----------
+.env
+.env.*
+*.local
+Secrets.plist
+secrets.plist
+Secrets.xcconfig
+secrets.xcconfig
+Config.local.plist
+GoogleService-Info.plist.local
+
+# ---------- Claude Code worktrees and local session state ----------
+# (CLAUDE.md, agent configs, slash commands ARE tracked — only worktrees
+# and local-only settings are ignored)
+.claude/worktrees/
+.claude/settings.local.json
+.claude/.session/
+.claude/cache/
+
+# ---------- Misc editor / OS scratch ----------
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.log
+node_modules/
