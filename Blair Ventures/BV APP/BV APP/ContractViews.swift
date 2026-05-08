@@ -583,18 +583,69 @@ struct ContractDetailView: View {
 
     // MARK: - Sign-off action handlers
 
+    /// Mint a contract sign-off magic link and either:
+    ///   • auto-email it to `contract.counterpartyEmail` when set, or
+    ///   • fall back to the share sheet so the operator can route the link
+    ///     manually (preserves the legacy behavior for contracts whose
+    ///     counterparty email isn't on file yet).
     private func mintSignOffLink() async {
         guard let c = contract else { return }
         do {
             let result = try await ContractAcceptanceService.shared.mintToken(contractID: c.id)
             pendingSignOffURL = result.url
-            showSignOffShare = true
-            ToastService.shared.success("Sign-off link minted — share via email or message.")
+
+            let recipient = c.counterpartyEmail?.trimmingCharacters(in: .whitespaces)
+            if let email = recipient, !email.isEmpty {
+                let mailResult = await EmailService.shared.sendText(
+                    to:         [email],
+                    subject:    contractSignOffEmailSubject(contract: c),
+                    bodyText:   contractSignOffEmailBody(contract: c, url: result.url),
+                    entityType: "contract",
+                    entityID:   c.id
+                )
+                switch mailResult {
+                case .success:
+                    ToastService.shared.success("Sign-off link emailed to \(email).")
+                case .failure(let err):
+                    showSignOffShare = true
+                    ToastService.shared.error("Couldn't email link: \(err.userMessage). Share manually.")
+                }
+            } else {
+                showSignOffShare = true
+                ToastService.shared.success("Sign-off link minted — share via email or message.")
+            }
         } catch let err as ContractAcceptanceService.AcceptanceError {
             ToastService.shared.error(err.errorDescription ?? "Couldn't mint link")
         } catch {
             ToastService.shared.error(error.localizedDescription)
         }
+    }
+
+    private func contractSignOffEmailSubject(contract c: Contract) -> String {
+        let company = AppSettings.shared.companyName.isEmpty
+            ? "Aski IQ"
+            : AppSettings.shared.companyName
+        let label = c.title.isEmpty ? "contract" : c.title
+        return "Sign-off request — \(label) — \(company)"
+    }
+
+    private func contractSignOffEmailBody(contract c: Contract, url: URL) -> String {
+        let signer = AppSettings.shared.companyName.isEmpty
+            ? "Aski IQ"
+            : AppSettings.shared.companyName
+        let title = c.title.isEmpty ? "this contract" : c.title
+        return """
+        Hello,
+
+        Please review and sign \(title) using the secure link below:
+
+        \(url.absoluteString)
+
+        This link is unique to you and will expire after 30 days. Reply to this email if you have any questions.
+
+        Thanks,
+        \(signer)
+        """
     }
 
     private func revokeSignOff() async {
@@ -2525,21 +2576,91 @@ struct LienWaiverEditSheet: View {
 
     // MARK: - Sign-off actions
 
+    /// Mint a sign-off magic link and either:
+    ///   • auto-email it to `waiver.waiverFromEmail` when set, or
+    ///   • fall back to the share sheet so the operator can route the link
+    ///     through email / SMS / messages manually (matches the legacy
+    ///     behavior; preserves usability when no email is on file).
+    /// Mirrors the BulkLienWaiverService.sendOne pattern — same body /
+    /// subject helpers would be ideal here once we extract them.
     private func mintSignLink(for waiverID: UUID) async {
         isMinting = true
         defer { isMinting = false }
         do {
             let result = try await LienWaiverAcceptanceService.shared.mintToken(waiverID: waiverID)
             pendingSignURL = result.url
-            showShareSheet = true
             // Refresh local status after the mint.
             signStatus = try? await LienWaiverAcceptanceService.shared.fetchStatus(waiverID: waiverID)
-            ToastService.shared.success("Sign-off link minted — share via email or SMS.")
+
+            // Auto-email when a recipient email is on file. The address comes
+            // from waiverFromEmail (the party signing the waiver). Falls
+            // through to the share sheet on missing/blank email so we don't
+            // surprise an operator who's used to sharing via SMS.
+            let recipient = waiverFromEmail(for: waiverID)
+            if let email = recipient {
+                let mailResult = await EmailService.shared.sendText(
+                    to:         [email],
+                    subject:    acknowledgmentEmailSubject(),
+                    bodyText:   acknowledgmentEmailBody(url: result.url),
+                    entityType: "lien_waiver",
+                    entityID:   waiverID
+                )
+                switch mailResult {
+                case .success:
+                    ToastService.shared.success("Acknowledgment link emailed to \(email).")
+                case .failure(let err):
+                    // Email failed — still surface the share sheet so the
+                    // operator can deliver the link out-of-band.
+                    showShareSheet = true
+                    ToastService.shared.error("Couldn't email link: \(err.userMessage). Share manually.")
+                }
+            } else {
+                showShareSheet = true
+                ToastService.shared.success("Sign-off link minted — share via email or SMS.")
+            }
         } catch let err as LienWaiverAcceptanceService.AcceptanceError {
             ToastService.shared.error(err.errorDescription ?? "Couldn't mint link")
         } catch {
             ToastService.shared.error(error.localizedDescription)
         }
+    }
+
+    /// Resolve the email address to send the acknowledgment link to.
+    /// Reads from the persisted waiver row rather than the local form state
+    /// so a freshly-saved row's email is honored even if the editor was
+    /// dismissed/reopened.
+    private func waiverFromEmail(for waiverID: UUID) -> String? {
+        // Persisted row first, form state as fallback (covers a fresh waiver
+        // whose email hasn't synced through the local store yet).
+        let raw = store.lienWaivers.first { $0.id == waiverID }?.waiverFromEmail
+            ?? signedByEmail
+        let trimmed = raw.trimmingCharacters(in: .whitespaces)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func acknowledgmentEmailSubject() -> String {
+        let company = AppSettings.shared.companyName.isEmpty
+            ? "Aski IQ"
+            : AppSettings.shared.companyName
+        return "Lien waiver acknowledgment request — \(company)"
+    }
+
+    private func acknowledgmentEmailBody(url: URL) -> String {
+        let signer = AppSettings.shared.companyName.isEmpty
+            ? "Aski IQ"
+            : AppSettings.shared.companyName
+        return """
+        Hello,
+
+        Please review and sign the lien waiver acknowledgment using the secure link below:
+
+        \(url.absoluteString)
+
+        This link is unique to you and will expire after 30 days. Reply to this email if you have any questions.
+
+        Thanks,
+        \(signer)
+        """
     }
 
     private func revokeSignLink() async {

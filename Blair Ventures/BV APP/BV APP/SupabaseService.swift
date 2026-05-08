@@ -142,6 +142,9 @@ enum SupabaseTable {
     // Workflow automation (added 2026-04 audit — previously UserDefaults-only)
     static let workflowRules      = "workflow_rules"
     static let workflowLog        = "workflow_log"
+    // Material Request workflow (SupabaseMigration_MaterialRequestWorkflow.sql)
+    static let workflowSettings   = "workflow_settings"
+    static let materialRequestAudit = "material_request_audit"
 }
 
 // MARK: - App User Profile

@@ -69,6 +69,17 @@ final class AppStore: ObservableObject {
     @Published var complianceDocuments:  [ComplianceDocument] = []
     @Published var lienWaivers:          [LienWaiver]         = []
 
+    // Approval limits + workflow permissions per role per company. Populated
+    // by SyncEngine.pullWorkflowSettings(); consumed by AppStore helpers in
+    // WorkflowSetting.swift to gate Submit/Approve/Send/Receive actions.
+    @Published var workflowSettings:     [WorkflowSetting]    = []
+
+    // Read-only audit history for Material Requests. Written server-side by
+    // the log_material_request_status_change trigger; pulled by
+    // SyncEngine.pullMaterialRequestAudit() and shown in MRDetailView's
+    // History section.
+    @Published var materialRequestAudits: [MaterialRequestAudit] = []
+
     // MARK: - CRM State
     @Published var crmContacts:     [CRMContact]     = []
     @Published var crmOpportunities:[CRMOpportunity] = []

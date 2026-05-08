@@ -755,10 +755,176 @@ extension SyncEngine {
     // ─────────────────────────────────────────────────────────────────────────
 
     func pullProcurement(role: UserRole) async {
+        // Workflow settings drive the Submit/Approve/Send/Receive button
+        // gating in MR + PO flows, so they need to be hydrated before any
+        // procurement view renders. Pulled even for field roles because
+        // `canCreateMaterialRequest` is itself a workflow setting.
+        await pullWorkflowSettings()
         guard !role.isFieldRole && !role.isExternal else { return }
         await pullSuppliers()
         await pullMaterialRequests()
         await pullPurchaseOrders()
+        // Audit history depends on the requests being present locally so the
+        // History section can resolve materialRequestID → request. Pulled
+        // last for that reason.
+        await pullMaterialRequestAudit()
+    }
+
+    // MARK: Material Request Audit (read-only; written by DB trigger)
+
+    /// Hydrate the audit history for the current company. Pull-only model:
+    /// rows are written exclusively by log_material_request_status_change,
+    /// never by the client, so we replace the local cache wholesale on each
+    /// pull. Bounded by status flips per request × requests per company —
+    /// typically small enough to pull in one page. If this ever grows, add
+    /// a `gt: performed_at` filter against the most recent local row.
+    func pullMaterialRequestAudit() async {
+        guard let companyID = store.currentCompanyID else { return }
+        do {
+            struct Row: Codable {
+                let id: String
+                let company_id: String
+                let material_request_id: String
+                let action: String
+                let performed_by: String?
+                let performed_at: String
+                let old_status: String?
+                let new_status: String?
+                let metadata: AnyJSON?
+            }
+            let rows: [Row] = try await supabase
+                .from(SupabaseTable.materialRequestAudit)
+                .select()
+                .eq("company_id", value: companyID.uuidString)
+                .order("performed_at", ascending: false)
+                .execute().value
+
+            let events: [MaterialRequestAudit] = rows.compactMap { row in
+                guard let id  = UUID(uuidString: row.id),
+                      let cid = UUID(uuidString: row.company_id),
+                      let mrid = UUID(uuidString: row.material_request_id) else { return nil }
+                let perfAt = parseDate(row.performed_at) ?? Date()
+                let metadataData = (try? JSONEncoder().encode(row.metadata)) ?? Data()
+                return MaterialRequestAudit(
+                    id:                id,
+                    companyID:         cid,
+                    materialRequestID: mrid,
+                    action:            row.action,
+                    performedByID:     row.performed_by.flatMap { UUID(uuidString: $0) },
+                    performedAt:       perfAt,
+                    oldStatus:         row.old_status,
+                    newStatus:         row.new_status,
+                    metadataRaw:       metadataData
+                )
+            }
+            await MainActor.run {
+                store.materialRequestAudits = events
+                store.objectWillChange.send()
+            }
+        } catch {
+            print("⚠️ \(#function) failed: \(error)")
+            CrashReporter.capture(error: error, context: ["operation": "\(#function)"])
+        }
+    }
+
+    // MARK: Workflow Settings (approval limits per role per company)
+
+    /// Push a single workflow_settings row to Supabase. Called by
+    /// AppStore.upsertWorkflowSetting when the admin saves a change. Single
+    /// row at a time because admin edits are rare and unbatched — no need
+    /// for a pending-set + bulk push pattern.
+    func pushPendingWorkflowSettings(_ setting: WorkflowSetting) async {
+        do {
+            struct Row: Codable {
+                let id, company_id, role_key: String
+                let approval_limit_amount: Decimal
+                let can_self_approve: Bool
+                let can_create_material_request: Bool
+                let can_approve_material_request: Bool
+                let can_send_to_supplier: Bool
+                let can_receive_materials: Bool
+                let is_active: Bool
+                let updated_at: String
+            }
+            let row = Row(
+                id:                            setting.id.uuidString,
+                company_id:                    setting.companyID.uuidString,
+                role_key:                      setting.roleKey,
+                approval_limit_amount:         setting.approvalLimitAmount,
+                can_self_approve:              setting.canSelfApprove,
+                can_create_material_request:   setting.canCreateMaterialRequest,
+                can_approve_material_request:  setting.canApproveMaterialRequest,
+                can_send_to_supplier:          setting.canSendToSupplier,
+                can_receive_materials:         setting.canReceiveMaterials,
+                is_active:                     setting.isActive,
+                updated_at:                    isoFull.string(from: setting.updatedAt)
+            )
+            // ON CONFLICT (company_id, role_key) — the migration creates a
+            // unique constraint on this pair, so upsert resolves to update.
+            try await supabase
+                .from(SupabaseTable.workflowSettings)
+                .upsert(row, onConflict: "company_id,role_key")
+                .execute()
+        } catch {
+            print("⚠️ \(#function) failed: \(error)")
+            CrashReporter.capture(error: error, context: ["operation": "\(#function)"])
+            await MainActor.run {
+                ToastService.shared.error("Couldn't save workflow setting: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Hydrate workflow_settings for the current company. Replaces the local
+    /// cache wholesale because rows are admin-managed in the DB — there are
+    /// no pending local writes to merge in.
+    func pullWorkflowSettings() async {
+        guard let companyID = store.currentCompanyID else { return }
+        do {
+            struct Row: Codable {
+                let id: String
+                let company_id: String
+                let role_key: String
+                let approval_limit_amount: Decimal
+                let can_self_approve: Bool
+                let can_create_material_request: Bool
+                let can_approve_material_request: Bool
+                let can_send_to_supplier: Bool
+                let can_receive_materials: Bool
+                let is_active: Bool
+                let updated_at: String?
+            }
+            let rows: [Row] = try await supabase
+                .from(SupabaseTable.workflowSettings)
+                .select()
+                .eq("company_id", value: companyID.uuidString)
+                .eq("is_active", value: true)
+                .execute().value
+
+            let settings: [WorkflowSetting] = rows.compactMap { row in
+                guard let id  = UUID(uuidString: row.id),
+                      let cid = UUID(uuidString: row.company_id) else { return nil }
+                return WorkflowSetting(
+                    id:                            id,
+                    companyID:                     cid,
+                    roleKey:                       row.role_key,
+                    approvalLimitAmount:           row.approval_limit_amount,
+                    canSelfApprove:                row.can_self_approve,
+                    canCreateMaterialRequest:      row.can_create_material_request,
+                    canApproveMaterialRequest:     row.can_approve_material_request,
+                    canSendToSupplier:             row.can_send_to_supplier,
+                    canReceiveMaterials:           row.can_receive_materials,
+                    isActive:                      row.is_active,
+                    updatedAt:                     parseDate(row.updated_at) ?? Date()
+                )
+            }
+            await MainActor.run {
+                store.workflowSettings = settings
+                store.objectWillChange.send()
+            }
+        } catch {
+            print("⚠️ \(#function) failed: \(error)")
+            CrashReporter.capture(error: error, context: ["operation": "\(#function)"])
+        }
     }
 
     func pushPendingProcurement() async {
@@ -866,11 +1032,21 @@ extension SyncEngine {
         do {
             struct Row: Codable {
                 let id, request_number, status: String
-                let project_id: String?
+                let project_id, supplier_id, material_sales_id, requested_by_employee_id: String?
+                let destination_type: String?
                 let requested_by_name: String?
                 let request_date, required_by_date: String?
                 let notes, site_location: String?
                 let line_items_json: String?
+                // Audit fields
+                let submitted_by_user_id, approved_by_user_id, received_by_user_id: String?
+                let submitted_at, approved_at, ordered_at, received_at, closed_at: String?
+                let approval_note: String?
+                // PDF tracking
+                let pdf_storage_path: String?
+                let pdf_generated_at: String?
+                // Delivery proof
+                let delivery_photo_url: String?
             }
             let rows: [Row] = try await supabase
                 .from(SupabaseTable.materialRequests)
@@ -888,12 +1064,29 @@ extension SyncEngine {
                 var mr = MaterialRequest(requestNumber: row.request_number, projectID: projID)
                 mr.id               = uuid
                 mr.status           = MaterialRequestStatus(rawValue: row.status) ?? .draft
+                mr.destinationType  = row.destination_type
+                    .flatMap { MaterialRequestDestinationType(rawValue: $0) } ?? .internalUse
+                mr.materialSaleID   = row.material_sales_id.flatMap { UUID(uuidString: $0) }
+                mr.supplierID       = row.supplier_id.flatMap { UUID(uuidString: $0) }
+                mr.requestedByID    = row.requested_by_employee_id.flatMap { UUID(uuidString: $0) }
                 mr.requestedByName  = row.requested_by_name ?? ""
                 mr.requestDate      = parseDate(row.request_date) ?? Date()
                 mr.requiredByDate   = parseDate(row.required_by_date)
                 mr.notes            = row.notes ?? ""
                 mr.siteLocation     = row.site_location ?? ""
                 mr.lineItems        = decodeJSON(row.line_items_json, as: [MaterialLineItem].self) ?? []
+                mr.submittedByID    = row.submitted_by_user_id.flatMap { UUID(uuidString: $0) }
+                mr.submittedAt      = parseDate(row.submitted_at)
+                mr.approvedByID     = row.approved_by_user_id.flatMap { UUID(uuidString: $0) }
+                mr.approvedAt       = parseDate(row.approved_at)
+                mr.approvalNote     = row.approval_note ?? ""
+                mr.orderedAt        = parseDate(row.ordered_at)
+                mr.receivedByID     = row.received_by_user_id.flatMap { UUID(uuidString: $0) }
+                mr.receivedAt       = parseDate(row.received_at)
+                mr.closedAt         = parseDate(row.closed_at)
+                mr.pdfStoragePath   = row.pdf_storage_path
+                mr.pdfGeneratedAt   = parseDate(row.pdf_generated_at)
+                mr.deliveryPhotoURL = row.delivery_photo_url
                 mr.syncStatus       = .synced
                 merged.removeAll { $0.id == uuid }
                 merged.append(mr)
@@ -914,11 +1107,21 @@ extension SyncEngine {
             do {
                 struct Row: Codable {
                     let id, company_id, request_number, status: String
-                    let project_id: String?
+                    let destination_type: String
+                    let project_id, supplier_id, material_sales_id, requested_by_employee_id: String?
                     let requested_by_name: String?
                     let request_date, required_by_date: String?
                     let notes, site_location: String?
                     let line_items_json: String?
+                    // Audit fields — set by the typed transition methods on
+                    // AppStore. Pushing them so the DB trigger captures
+                    // who/when in material_request_audit metadata.
+                    let submitted_by_user_id, approved_by_user_id, received_by_user_id: String?
+                    let submitted_at, approved_at, ordered_at, received_at, closed_at: String?
+                    let approval_note: String?
+                    let pdf_storage_path: String?
+                    let pdf_generated_at: String?
+                    let delivery_photo_url: String?
                     let is_deleted: Bool
                     let deleted_at: String?
                     let deleted_by: String?
@@ -928,13 +1131,29 @@ extension SyncEngine {
                     company_id:        (mr.companyID ?? companyID).uuidString,
                     request_number:    mr.requestNumber,
                     status:            mr.status.rawValue,
+                    destination_type:  mr.destinationType.rawValue,
                     project_id:        mr.projectID?.uuidString,
+                    supplier_id:       mr.supplierID?.uuidString,
+                    material_sales_id: mr.materialSaleID?.uuidString,
+                    requested_by_employee_id: mr.requestedByID?.uuidString,
                     requested_by_name: mr.requestedByName.isEmpty ? nil : mr.requestedByName,
                     request_date:      isoDateFmt.string(from: mr.requestDate),
                     required_by_date:  mr.requiredByDate.map { isoDateFmt.string(from: $0) },
                     notes:             mr.notes.isEmpty        ? nil : mr.notes,
                     site_location:     mr.siteLocation.isEmpty ? nil : mr.siteLocation,
                     line_items_json:   jsonString(mr.lineItems),
+                    submitted_by_user_id: mr.submittedByID?.uuidString,
+                    approved_by_user_id:  mr.approvedByID?.uuidString,
+                    received_by_user_id:  mr.receivedByID?.uuidString,
+                    submitted_at:      mr.submittedAt.map { isoFull.string(from: $0) },
+                    approved_at:       mr.approvedAt.map  { isoFull.string(from: $0) },
+                    ordered_at:        mr.orderedAt.map   { isoFull.string(from: $0) },
+                    received_at:       mr.receivedAt.map  { isoFull.string(from: $0) },
+                    closed_at:         mr.closedAt.map    { isoFull.string(from: $0) },
+                    approval_note:     mr.approvalNote.isEmpty ? nil : mr.approvalNote,
+                    pdf_storage_path:  mr.pdfStoragePath,
+                    pdf_generated_at:  mr.pdfGeneratedAt.map { isoFull.string(from: $0) },
+                    delivery_photo_url: mr.deliveryPhotoURL,
                     is_deleted:        mr.isDeleted,
                     deleted_at:        mr.deletedAt.map { isoFull.string(from: $0) },
                     deleted_by:        mr.deletedBy

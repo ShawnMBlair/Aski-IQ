@@ -2,6 +2,7 @@
 // Aski IQ – Materials & Purchase Orders UI
 
 import SwiftUI
+import PhotosUI
 
 // MARK: - Phase 9 Locked Banner (shared by MR + PO create-edit views)
 
@@ -35,60 +36,314 @@ struct ProcurementLockedBanner: View {
 
 // MARK: - Procurement Hub
 
+/// Procurement Hub — pipeline-status dashboard.
+///
+/// REPLACES the old 3-tab segmented control (Requests/POs/Suppliers) which
+/// surfaced the data model rather than the workflow. The new layout mirrors
+/// the operator's mental flow: Request → Approve → Buy → Receive → Close.
+///
+/// Each section card shows count + a one-line summary; tap navigates into a
+/// filtered list view. The legacy POs / Suppliers screens stay reachable via
+/// the toolbar's Browse menu — they're useful for day-to-day catalog work,
+/// just not the primary entry point anymore.
 struct ProcurementHubView: View {
     @EnvironmentObject var store: AppStore
-    @State private var selectedTab = 0
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                Picker("Section", selection: $selectedTab) {
-                    Text("Requests").tag(0)
-                    Text("POs").tag(1)
-                    Text("Suppliers").tag(2)
+            ScrollView {
+                VStack(spacing: 16) {
+                    myQueueCard
+                    pipelineSection
+                    quickActionsSection
                 }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
-                .padding(.vertical, 10)
-
-                Divider()
-
-                switch selectedTab {
-                case 1:  POListContent()
-                case 2:  SupplierListContent()
-                default: MRListContent()
-                }
+                .padding(.vertical, 12)
             }
+            .background(Color(.systemGroupedBackground))
             .navigationTitle("Procurement")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    navigationAddButton
+                    Menu {
+                        NavigationLink {
+                            MRCreateEditView(request: nil, preselectedProjectID: nil)
+                        } label: { Label("New Request", systemImage: "plus.square") }
+                        Divider()
+                        NavigationLink {
+                            ProcurementBrowseView()
+                        } label: { Label("Browse All", systemImage: "list.bullet.rectangle") }
+                    } label: {
+                        Image(systemName: "plus")
+                    }
                 }
             }
         }
     }
 
+    // MARK: - My Queue
+
+    /// Items the *current* user can act on right now. Drives the
+    /// at-a-glance "what's waiting on me" experience that lets a user
+    /// open the app and find their work without scrolling.
     @ViewBuilder
-    private var navigationAddButton: some View {
+    private var myQueueCard: some View {
+        let queue = store.myProcurementQueue
+        if !queue.isEmpty {
+            NavigationLink {
+                ProcurementSectionListView(title: "My Queue", requests: queue)
+            } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: "person.crop.circle.badge.checkmark")
+                        .font(.title2)
+                        .foregroundColor(.white)
+                        .frame(width: 44, height: 44)
+                        .background(Color.blue)
+                        .clipShape(Circle())
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(queue.count) waiting on you")
+                            .font(.headline)
+                        Text("Tap to review what you can approve, send, or receive.")
+                            .font(.caption).foregroundColor(.secondary)
+                            .lineLimit(2)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.footnote).foregroundColor(.secondary)
+                }
+                .padding()
+                .background(Color(.secondarySystemBackground))
+                .cornerRadius(12)
+                .padding(.horizontal)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    // MARK: - Pipeline
+
+    private var pipelineSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("PIPELINE")
+                .font(.caption).bold().foregroundColor(.secondary)
+                .padding(.horizontal)
+            VStack(spacing: 0) {
+                pipelineRow(
+                    title:   "Draft",
+                    detail:  "Started but not submitted",
+                    icon:    "pencil.line",
+                    color:   .gray,
+                    requests: store.draftMaterialRequests
+                )
+                Divider().padding(.leading, 60)
+                pipelineRow(
+                    title:   "Pending Approval",
+                    detail:  "Waiting on manager / PM",
+                    icon:    "clock.badge.exclamationmark",
+                    color:   .orange,
+                    requests: store.pendingMaterialApprovals
+                )
+                Divider().padding(.leading, 60)
+                pipelineRow(
+                    title:   "Approved to Order",
+                    detail:  "Ready to send to supplier",
+                    icon:    "checkmark.seal.fill",
+                    color:   .green,
+                    requests: store.approvedToOrderRequests
+                )
+                Divider().padding(.leading, 60)
+                pipelineRow(
+                    title:   "Ordered",
+                    detail:  "Sent to supplier, awaiting delivery",
+                    icon:    "paperplane.fill",
+                    color:   .blue,
+                    requests: store.orderedMaterialRequests
+                )
+                Divider().padding(.leading, 60)
+                pipelineRow(
+                    title:   "Partially Received",
+                    detail:  "Some items in, more to come",
+                    icon:    "shippingbox.and.arrow.backward.fill",
+                    color:   .purple,
+                    requests: store.partiallyReceivedRequests
+                )
+                Divider().padding(.leading, 60)
+                pipelineRow(
+                    title:   "Received",
+                    detail:  "Materials in, awaiting close",
+                    icon:    "shippingbox.fill",
+                    color:   .green,
+                    requests: store.deliveredMaterialRequests
+                )
+            }
+            .background(Color(.secondarySystemBackground))
+            .cornerRadius(12)
+            .padding(.horizontal)
+        }
+    }
+
+    @ViewBuilder
+    private func pipelineRow(title: String,
+                             detail: String,
+                             icon: String,
+                             color: Color,
+                             requests: [MaterialRequest]) -> some View {
+        NavigationLink {
+            ProcurementSectionListView(title: title, requests: requests)
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: icon)
+                    .font(.body)
+                    .foregroundColor(.white)
+                    .frame(width: 32, height: 32)
+                    .background(color)
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.subheadline).bold()
+                    Text(detail).font(.caption2).foregroundColor(.secondary)
+                }
+                Spacer()
+                if requests.isEmpty {
+                    Text("0")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("\(requests.count)")
+                        .font(.subheadline).bold()
+                        .padding(.horizontal, 8).padding(.vertical, 2)
+                        .background(color.opacity(0.15))
+                        .foregroundColor(color)
+                        .clipShape(Capsule())
+                }
+                Image(systemName: "chevron.right")
+                    .font(.footnote).foregroundColor(.secondary)
+            }
+            .padding(.horizontal).padding(.vertical, 10)
+        }
+        .buttonStyle(.plain)
+        .disabled(requests.isEmpty)
+    }
+
+    // MARK: - Quick Actions
+
+    private var quickActionsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("QUICK ACTIONS")
+                .font(.caption).bold().foregroundColor(.secondary)
+                .padding(.horizontal)
+            VStack(spacing: 0) {
+                NavigationLink {
+                    MRCreateEditView(request: nil, preselectedProjectID: nil)
+                } label: {
+                    quickActionRow("New Material Request",
+                                   icon: "plus.circle.fill",
+                                   color: .blue)
+                }
+                .buttonStyle(.plain)
+                Divider().padding(.leading, 60)
+                NavigationLink {
+                    ProcurementBrowseView()
+                } label: {
+                    quickActionRow("Browse Suppliers, POs, All Requests",
+                                   icon: "list.bullet.rectangle",
+                                   color: .gray)
+                }
+                .buttonStyle(.plain)
+            }
+            .background(Color(.secondarySystemBackground))
+            .cornerRadius(12)
+            .padding(.horizontal)
+        }
+    }
+
+    private func quickActionRow(_ title: String, icon: String, color: Color) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon)
+                .font(.body)
+                .foregroundColor(.white)
+                .frame(width: 32, height: 32)
+                .background(color)
+                .clipShape(RoundedRectangle(cornerRadius: 7))
+            Text(title).font(.subheadline)
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.footnote).foregroundColor(.secondary)
+        }
+        .padding(.horizontal).padding(.vertical, 10)
+    }
+}
+
+// MARK: - Procurement Section List
+// Reusable filtered list shown when a Hub pipeline section is tapped.
+
+struct ProcurementSectionListView: View {
+    @EnvironmentObject var store: AppStore
+    let title: String
+    let requests: [MaterialRequest]
+
+    var body: some View {
+        Group {
+            if requests.isEmpty {
+                ContentUnavailableView(
+                    "No requests in this stage",
+                    systemImage: "tray",
+                    description: Text("Items in this status will appear here.")
+                )
+            } else {
+                List {
+                    ForEach(requests.sorted { $0.requestDate > $1.requestDate }) { mr in
+                        NavigationLink { MRDetailView(request: mr) } label: { MRRow(request: mr) }
+                    }
+                }
+                .listStyle(.plain)
+            }
+        }
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+// MARK: - Procurement Browse View
+// Legacy 3-tab segmented control kept available for catalog browsing
+// (full request list, all POs, all suppliers). Reachable via the Hub's
+// toolbar Browse menu — no longer the default entry point.
+
+struct ProcurementBrowseView: View {
+    @State private var selectedTab = 0
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("Section", selection: $selectedTab) {
+                Text("Requests").tag(0)
+                Text("POs").tag(1)
+                Text("Suppliers").tag(2)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal)
+            .padding(.vertical, 10)
+            Divider()
+            switch selectedTab {
+            case 1:  POListContent()
+            case 2:  SupplierListContent()
+            default: MRListContent()
+            }
+        }
+        .navigationTitle("Browse")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                browseAddButton
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var browseAddButton: some View {
         switch selectedTab {
         case 1:
-            Button { } label: { Image(systemName: "plus") }
-                .background(
-                    NavigationLink(destination: POCreateEditView(po: nil)) { EmptyView() }
-                        .opacity(0)
-                )
+            NavigationLink { POCreateEditView(po: nil) } label: { Image(systemName: "plus") }
         case 2:
-            Button { } label: { Image(systemName: "plus") }
-                .background(
-                    NavigationLink(destination: SupplierCreateEditView(supplier: nil)) { EmptyView() }
-                        .opacity(0)
-                )
+            NavigationLink { SupplierCreateEditView(supplier: nil) } label: { Image(systemName: "plus") }
         default:
-            Button { } label: { Image(systemName: "plus") }
-                .background(
-                    NavigationLink(destination: MRCreateEditView(request: nil, preselectedProjectID: nil)) { EmptyView() }
-                        .opacity(0)
-                )
+            NavigationLink { MRCreateEditView(request: nil, preselectedProjectID: nil) } label: { Image(systemName: "plus") }
         }
     }
 }
@@ -255,6 +510,9 @@ struct MRDetailView: View {
     @State private var showEdit = false
     @State private var showCreatePO = false
     @State private var showDeleteAlert = false
+    @State private var showReceiveSheet = false
+    @State private var showDuplicateAlert = false
+    @State private var duplicateMatches: [MaterialRequest] = []
 
     init(request: MaterialRequest) {
         self.request = request
@@ -265,7 +523,39 @@ struct MRDetailView: View {
         local.projectID.flatMap { pid in store.projects.first { $0.id == pid }?.name } ?? "No Project"
     }
 
+    /// True when the current user can approve THIS specific request — both
+    /// (a) their role has approval rights, and (b) the request total is
+    /// within their per-role approval limit. Lookup goes through
+    /// AppStore.canApproveMaterialRequest(amount:) which reads the workflow
+    /// settings hydrated from Supabase, not a hardcoded role list.
     private var canApprove: Bool {
+        store.canApproveMaterialRequest(amount: local.estimatedTotal)
+    }
+
+    /// Routing copy for the Submit button — tells the user which role will
+    /// actually see the approval queue, sourced from workflow_settings rather
+    /// than a hardcoded chain.
+    private var nextApproverRoleName: String? {
+        store.minimumApprovingRole(for: local.estimatedTotal)?.displayName
+    }
+
+    /// True when the current user can delete this request. Mirrors the
+    /// existing footer button check but pulls role permissions from the
+    /// workflow settings table so admins can rebalance later without code
+    /// changes. Falls back to the legacy hardcoded gate when the workflow
+    /// settings table hasn't been populated yet (deny-all setting → false).
+    private var canDelete: Bool {
+        // Delete is intentionally not exposed as a workflow_settings field
+        // because deletion is an admin action, not part of the MR pipeline.
+        // Keep the hardcoded role list for now.
+        [.officeAdmin, .manager, .executive].contains(store.currentUserRole)
+    }
+
+    /// Editing is gated by role only (not by amount). A project manager
+    /// editing a $50k request shouldn't be blocked just because they can't
+    /// approve that amount — they need to be able to fix typos / line items
+    /// before sending it up the chain.
+    private var canEditByRole: Bool {
         [.projectManager, .officeAdmin, .manager, .executive].contains(store.currentUserRole)
     }
 
@@ -330,6 +620,17 @@ struct MRDetailView: View {
                                         if !item.costCode.isEmpty {
                                             Text(item.costCode).font(.caption2).foregroundColor(.secondary)
                                         }
+                                        // Show received progress only after the receive
+                                        // workflow has been started — keeps the row uncluttered
+                                        // for draft/approved requests.
+                                        if item.quantityReceived > 0 {
+                                            Label(
+                                                "Received \(decStr(item.quantityReceived)) of \(decStr(item.quantity))",
+                                                systemImage: item.isFullyReceived ? "checkmark.circle.fill" : "shippingbox"
+                                            )
+                                            .font(.caption2)
+                                            .foregroundColor(item.isFullyReceived ? .green : .orange)
+                                        }
                                     }
                                     Spacer()
                                     Text("\(decStr(item.quantity)) \(item.unit.displayName)")
@@ -372,16 +673,80 @@ struct MRDetailView: View {
                 // Approval info
                 if local.status == .approved || local.status == .ordered || local.status == .delivered {
                     GroupBox {
-                        HStack {
-                            Label(local.approvedByName, systemImage: "checkmark.seal.fill")
-                                .font(.subheadline).foregroundColor(.green)
-                            Spacer()
-                            if let at = local.approvedAt {
-                                Text(at.shortDate).font(.caption).foregroundColor(.secondary)
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Label(local.approvedByName, systemImage: "checkmark.seal.fill")
+                                    .font(.subheadline).foregroundColor(.green)
+                                Spacer()
+                                if let at = local.approvedAt {
+                                    Text(at.shortDate).font(.caption).foregroundColor(.secondary)
+                                }
+                            }
+                            if !local.approvalNote.isEmpty {
+                                Text(local.approvalNote)
+                                    .font(.caption).foregroundColor(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            // Approval PDF generated by MaterialRequestPDFGenerator. Tap
+                            // opens the file via QuickLook through DocumentDetailView,
+                            // same as any other ProjectDocument.
+                            if let storedFileName = local.pdfStoragePath {
+                                let url = FileManager.default
+                                    .urls(for: .documentDirectory, in: .userDomainMask)[0]
+                                    .appendingPathComponent(storedFileName)
+                                if FileManager.default.fileExists(atPath: url.path) {
+                                    Link(destination: url) {
+                                        Label("View Approval PDF", systemImage: "doc.fill")
+                                            .font(.caption).bold()
+                                    }
+                                }
                             }
                         }
                     } label: {
                         Text("Approved").font(.caption).foregroundColor(.secondary)
+                    }
+                    .padding(.horizontal).padding(.top, 12)
+                }
+
+                // Delivery photo — fetched on demand via signed URL since
+                // the storage path is server-side. Embedded as a tappable
+                // AsyncImage that opens the full-resolution image in a sheet.
+                if let storagePath = local.deliveryPhotoURL, !storagePath.isEmpty {
+                    GroupBox {
+                        DeliveryPhotoThumbnail(storagePath: storagePath)
+                    } label: {
+                        Text("Delivery Proof").font(.caption).foregroundColor(.secondary)
+                    }
+                    .padding(.horizontal).padding(.top, 12)
+                }
+
+                // History — server-authoritative audit trail written by the
+                // log_material_request_status_change DB trigger. Read-only on
+                // the client; visible to anyone who can view the request.
+                let history = store.auditEvents(for: local.id)
+                if !history.isEmpty {
+                    GroupBox {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(history) { event in
+                                HStack(alignment: .top, spacing: 8) {
+                                    Image(systemName: historyIcon(for: event))
+                                        .font(.caption)
+                                        .foregroundColor(historyColor(for: event))
+                                        .frame(width: 16)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(event.displayTitle(in: store))
+                                            .font(.caption).bold()
+                                        Text(event.performedAt.formatted(date: .abbreviated, time: .shortened))
+                                            .font(.caption2).foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                }
+                                .padding(.vertical, 2)
+                                if event.id != history.last?.id { Divider() }
+                            }
+                        }
+                    } label: {
+                        Text("History").font(.caption).foregroundColor(.secondary)
                     }
                     .padding(.horizontal).padding(.top, 12)
                 }
@@ -410,9 +775,23 @@ struct MRDetailView: View {
 
                 // Actions
                 VStack(spacing: 10) {
-                    if local.status == .draft {
-                        actionButton("Submit for Approval", icon: "paperplane.fill", color: .blue) {
-                            transition(to: .submitted)
+                    if local.status == .draft && store.canCreateMaterialRequest {
+                        // Self-approve shortcut for trusted roles within their
+                        // approval limit — skips the submit-then-approve dance
+                        // for routine purchases by managers / executives.
+                        if store.canSelfApproveMaterialRequest(amount: local.estimatedTotal) {
+                            actionButton("Submit & Approve", icon: "checkmark.seal.fill", color: .green) {
+                                store.approveMaterialRequest(local)
+                                refreshLocal()
+                            }
+                        } else {
+                            actionButton("Submit for Approval", icon: "paperplane.fill", color: .blue) {
+                                attemptSubmit()
+                            }
+                            if let role = nextApproverRoleName {
+                                Text("Will route to \(role) for approval.")
+                                    .font(.caption2).foregroundColor(.secondary)
+                            }
                         }
                     }
                     if local.status == .submitted && canApprove {
@@ -421,17 +800,69 @@ struct MRDetailView: View {
                             refreshLocal()
                         }
                     }
-                    if local.status == .approved && canApprove && local.purchaseOrderID == nil {
-                        actionButton("Create Purchase Order", icon: "doc.badge.plus", color: .purple) {
-                            showCreatePO = true
+                    // When the current user is in the .submitted queue but can't
+                    // approve this amount, surface why so they don't think the
+                    // app is broken — the request is just above their tier.
+                    if local.status == .submitted
+                        && !canApprove
+                        && store.currentUserWorkflowSetting.canApproveMaterialRequest {
+                        Text("Above your approval limit (\(store.currentUserWorkflowSetting.approvalLimitAmount.currencyString)).")
+                            .font(.caption).foregroundColor(.orange)
+                            .frame(maxWidth: .infinity).padding(.vertical, 8)
+                            .background(Color.orange.opacity(0.08)).cornerRadius(8)
+                    }
+                    if local.status == .approved && store.canSendToSupplier {
+                        // No supplier yet — give the user a clear next step
+                        // ("set a supplier so a PO can be drafted") rather
+                        // than a wall of disabled buttons.
+                        if local.supplierID == nil {
+                            HStack(alignment: .top, spacing: 8) {
+                                Image(systemName: "info.circle")
+                                    .foregroundColor(.orange)
+                                Text("Pick a supplier on this request to auto-draft a Purchase Order, or create one manually below.")
+                                    .font(.caption).foregroundColor(.secondary)
+                                Spacer()
+                            }
+                            .padding(10)
+                            .background(Color.orange.opacity(0.08))
+                            .cornerRadius(8)
+                        }
+                        // Email-to-supplier — only shown when a supplier with an
+                        // email is set on the MR. The generator regenerates the
+                        // PDF if the original was deleted from the doc grid.
+                        if local.supplierID != nil {
+                            actionButton("Email Approval to Supplier", icon: "envelope.fill", color: .blue) {
+                                Task {
+                                    #if canImport(UIKit)
+                                    let ok = await MaterialRequestPDFGenerator.shared
+                                        .emailApprovalPDF(for: local, store: store)
+                                    if ok {
+                                        await MainActor.run {
+                                            ToastService.shared.success("Sent — request marked as ordered.")
+                                            refreshLocal()
+                                        }
+                                    }
+                                    #endif
+                                }
+                            }
+                        }
+                        // The Create PO button is now only useful when no
+                        // PO got auto-drafted (supplier-less requests, or
+                        // legacy MRs approved before this automation
+                        // shipped). When auto-draft fired, the existing
+                        // "Linked PO" GroupBox above takes over.
+                        if local.purchaseOrderID == nil {
+                            actionButton("Create Purchase Order", icon: "doc.badge.plus", color: .purple) {
+                                showCreatePO = true
+                            }
                         }
                     }
-                    if local.status == .ordered {
-                        actionButton("Mark as Delivered", icon: "shippingbox.fill", color: .green) {
-                            transition(to: .delivered)
+                    if (local.status == .ordered || local.status == .partial) && store.canReceiveMaterials {
+                        actionButton("Receive Items", icon: "shippingbox.fill", color: .green) {
+                            showReceiveSheet = true
                         }
                     }
-                    if canApprove {
+                    if canEditByRole {
                         Button { showEdit = true } label: {
                             Label("Edit Request", systemImage: "pencil")
                                 .frame(maxWidth: .infinity).padding(.vertical, 12)
@@ -439,7 +870,7 @@ struct MRDetailView: View {
                                 .cornerRadius(10)
                         }
                     }
-                    if store.currentUserRole == .officeAdmin || store.currentUserRole == .manager || store.currentUserRole == .executive {
+                    if canDelete {
                         Button(role: .destructive) { showDeleteAlert = true } label: {
                             Label("Delete", systemImage: "trash")
                                 .frame(maxWidth: .infinity).padding(.vertical, 12)
@@ -460,10 +891,42 @@ struct MRDetailView: View {
         .sheet(isPresented: $showCreatePO, onDismiss: refreshLocal) {
             POCreateEditView(po: newPOFromRequest())
         }
+        .sheet(isPresented: $showReceiveSheet, onDismiss: refreshLocal) {
+            MRReceiveSheet(request: local) { quantities, photoPath in
+                store.receiveMaterialRequest(
+                    local,
+                    receivedQuantities: quantities,
+                    deliveryPhotoURL:   photoPath
+                )
+                refreshLocal()
+            }
+        }
         .alert("Delete Request", isPresented: $showDeleteAlert) {
             Button("Delete", role: .destructive) { store.deleteMaterialRequest(id: local.id); dismiss() }
             Button("Cancel", role: .cancel) {}
         } message: { Text("This cannot be undone.") }
+        .alert(
+            "Possible duplicate request",
+            isPresented: $showDuplicateAlert,
+            presenting: duplicateMatches
+        ) { matches in
+            // Warn-don't-block: the user can still submit, they just have
+            // to acknowledge the existing open requests first.
+            Button("Submit Anyway") { submitDespiteDuplicates() }
+            Button("Cancel", role: .cancel) {}
+        } message: { matches in
+            // Show up to 3 matches — keep the message readable on small
+            // screens. Beyond 3 we just say "and N more."
+            let preview = matches.prefix(3)
+                .map { "• \($0.requestNumber) (\($0.status.displayName))" }
+                .joined(separator: "\n")
+            let trailer = matches.count > 3
+                ? "\n…and \(matches.count - 3) more."
+                : ""
+            return Text(
+                "There \(matches.count == 1 ? "is" : "are") \(matches.count) open request\(matches.count == 1 ? "" : "s") on this destination with overlapping items:\n\n\(preview)\(trailer)\n\nReview them first to avoid double-ordering."
+            )
+        }
         .onAppear { refreshLocal() }
     }
 
@@ -481,6 +944,31 @@ struct MRDetailView: View {
         updated.updatedAt = Date()
         store.updateMaterialRequest(updated)
         refreshLocal()
+    }
+
+    /// Submit-for-approval entry point. Runs a duplicate-request check
+    /// against open requests on the same destination first; if matches are
+    /// found, raises a confirmation alert so the submitter can decide
+    /// whether to proceed (warn-don't-block per the spec — duplicate
+    /// requests are sometimes legitimate, e.g. follow-up after a partial
+    /// delivery short).
+    private func attemptSubmit() {
+        let matches = store.similarOpenRequests(to: local)
+        if matches.isEmpty {
+            store.submitMaterialRequest(local)
+            refreshLocal()
+        } else {
+            duplicateMatches = matches
+            showDuplicateAlert = true
+        }
+    }
+
+    /// User confirmed they understand the duplicates and want to submit
+    /// anyway. Called from the Submit-Anyway alert button.
+    private func submitDespiteDuplicates() {
+        store.submitMaterialRequest(local)
+        refreshLocal()
+        duplicateMatches = []
     }
 
     private func refreshLocal() {
@@ -502,6 +990,29 @@ struct MRDetailView: View {
         if d == Decimal(Int(truncating: n)) { return "\(Int(truncating: n))" }
         return n.stringValue
     }
+
+    private func historyIcon(for event: MaterialRequestAudit) -> String {
+        switch event.newStatus {
+        case "submitted": return "paperplane.fill"
+        case "approved":  return "checkmark.seal.fill"
+        case "ordered":   return "cart.fill"
+        case "partial":   return "shippingbox.and.arrow.backward.fill"
+        case "delivered": return "shippingbox.fill"
+        case "cancelled": return "xmark.circle.fill"
+        case "rejected":  return "hand.thumbsdown.fill"
+        default:          return event.action == "created" ? "plus.circle.fill" : "circle.fill"
+        }
+    }
+
+    private func historyColor(for event: MaterialRequestAudit) -> Color {
+        switch event.newStatus {
+        case "approved", "delivered": return .green
+        case "submitted":             return .blue
+        case "ordered", "partial":    return .purple
+        case "cancelled", "rejected": return .red
+        default:                       return .gray
+        }
+    }
 }
 
 // MARK: - MR Create/Edit View
@@ -513,7 +1024,11 @@ struct MRCreateEditView: View {
     let preselectedProjectID: UUID?
 
     @State private var requestNumber: String
+    @State private var destinationType: MaterialRequestDestinationType
     @State private var selectedProjectID: UUID?
+    @State private var selectedMaterialSaleID: UUID?
+    @State private var selectedSupplierID: UUID?
+    @State private var selectedRequestedByID: UUID?
     @State private var requestedByName: String
     @State private var requestDate: Date
     @State private var hasRequiredBy: Bool
@@ -529,16 +1044,26 @@ struct MRCreateEditView: View {
     init(request: MaterialRequest?, preselectedProjectID: UUID?) {
         self.request              = request
         self.preselectedProjectID = preselectedProjectID
-        _requestNumber    = State(initialValue: request?.requestNumber ?? "")
-        _selectedProjectID = State(initialValue: request?.projectID ?? preselectedProjectID)
-        _requestedByName  = State(initialValue: request?.requestedByName ?? "")
-        _requestDate      = State(initialValue: request?.requestDate ?? Date())
-        _hasRequiredBy    = State(initialValue: request?.requiredByDate != nil)
-        _requiredByDate   = State(initialValue: request?.requiredByDate ?? Calendar.current.date(byAdding: .day, value: 7, to: Date())!)
-        _siteLocation     = State(initialValue: request?.siteLocation ?? "")
-        _lineItems        = State(initialValue: request?.lineItems ?? [])
-        _notes            = State(initialValue: request?.notes ?? "")
-        _status           = State(initialValue: request?.status ?? .draft)
+        _requestNumber          = State(initialValue: request?.requestNumber ?? "")
+        // If a project is preselected, default destination to .project so the
+        // picker UI matches what the user came from.
+        let initialDestination: MaterialRequestDestinationType = {
+            if let r = request { return r.destinationType }
+            return preselectedProjectID != nil ? .project : .internalUse
+        }()
+        _destinationType        = State(initialValue: initialDestination)
+        _selectedProjectID      = State(initialValue: request?.projectID ?? preselectedProjectID)
+        _selectedMaterialSaleID = State(initialValue: request?.materialSaleID)
+        _selectedSupplierID     = State(initialValue: request?.supplierID)
+        _selectedRequestedByID  = State(initialValue: request?.requestedByID)
+        _requestedByName        = State(initialValue: request?.requestedByName ?? "")
+        _requestDate            = State(initialValue: request?.requestDate ?? Date())
+        _hasRequiredBy          = State(initialValue: request?.requiredByDate != nil)
+        _requiredByDate         = State(initialValue: request?.requiredByDate ?? Calendar.current.date(byAdding: .day, value: 7, to: Date())!)
+        _siteLocation           = State(initialValue: request?.siteLocation ?? "")
+        _lineItems              = State(initialValue: request?.lineItems ?? [])
+        _notes                  = State(initialValue: request?.notes ?? "")
+        _status                 = State(initialValue: request?.status ?? .draft)
     }
 
     private var isNew: Bool { request == nil }
@@ -574,6 +1099,8 @@ struct MRCreateEditView: View {
                     }
                     .listRowInsets(EdgeInsets())
                 }
+                if isNew { quickActionsSection }
+                if !validationIssues.isEmpty { validationBanner }
                 mrDetailsSection
                 mrLineItemsSection
                 Section("Notes") {
@@ -594,7 +1121,7 @@ struct MRCreateEditView: View {
                             .foregroundColor(.secondary)
                     } else {
                         Button("Save") { save() }.bold()
-                            .disabled(requestNumber.trimmingCharacters(in: .whitespaces).isEmpty)
+                            .disabled(!canSave)
                     }
                 }
             }
@@ -602,8 +1129,17 @@ struct MRCreateEditView: View {
                 if isNew && requestNumber.isEmpty {
                     requestNumber = store.nextMaterialRequestNumber()
                 }
-                if requestedByName.isEmpty {
-                    requestedByName = store.currentUser?.fullName ?? ""
+                // Default Requested By to the current employee (if their auth
+                // user has a matching employee record), falling back to their
+                // display name. Office staff with no employee record still get
+                // a sensible name pre-filled.
+                if selectedRequestedByID == nil && requestedByName.isEmpty {
+                    if let me = currentUserEmployee {
+                        selectedRequestedByID = me.id
+                        requestedByName       = me.fullName
+                    } else {
+                        requestedByName = store.currentUser?.fullName ?? ""
+                    }
                 }
             }
             .sheet(isPresented: $showAddLine) {
@@ -618,23 +1154,318 @@ struct MRCreateEditView: View {
         }
     }
 
+    /// Active employees (sorted by name) — populates the Requested By picker.
+    private var activeEmployees: [Employee] {
+        store.employees
+            .filter { $0.isActive && !$0.isDeleted }
+            .sorted { $0.fullName < $1.fullName }
+    }
+
+    // MARK: Validation
+    // Per-rule helpers feed both the inline banner and the Save-button gate.
+    // Keeping them as separate computed booleans (rather than one big array
+    // diff) means the UI can highlight specific fields, and adding a new
+    // rule doesn't require touching the Save logic.
+
+    private var hasRequestNumber: Bool {
+        !requestNumber.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private var hasDestinationTarget: Bool {
+        switch destinationType {
+        case .project:      return selectedProjectID != nil
+        case .materialSale: return selectedMaterialSaleID != nil
+        case .internalUse:  return true
+        }
+    }
+
+    private var hasRequestedBy: Bool {
+        selectedRequestedByID != nil
+            || !requestedByName.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    private var hasLineItems: Bool { !lineItems.isEmpty }
+
+    /// Ordered list of human-readable validation issues. Drives both the
+    /// inline banner ("Pick a project") and the disabled-state explanation
+    /// near the Save button. Empty array = ready to save.
+    private var validationIssues: [String] {
+        var issues: [String] = []
+        if !hasRequestNumber {
+            issues.append("Request number is required.")
+        }
+        if !hasDestinationTarget {
+            issues.append(destinationType == .project
+                ? "Pick a project for this request."
+                : "Pick a material sale for this request.")
+        }
+        if !hasRequestedBy {
+            issues.append("Requested By is required — select an employee or type a name.")
+        }
+        if !hasLineItems {
+            issues.append("Add at least one item.")
+        }
+        return issues
+    }
+
+    private var canSave: Bool { validationIssues.isEmpty && !isLocked }
+
+    // MARK: Quick-action helpers — Repeat / Import
+
+    /// User's most recent non-draft, non-cancelled request. Drives the
+    /// Repeat Last Request button. Filters to the current user so the
+    /// button doesn't replay someone else's request by accident.
+    private var lastRequestForCurrentUser: MaterialRequest? {
+        guard let uid = store.currentUser?.id else { return nil }
+        return store.materialRequests
+            .filter { mr in
+                guard !mr.isDeleted else { return false }
+                guard mr.requestedByID == uid else { return false }
+                guard mr.status != .draft && mr.status != .cancelled else { return false }
+                return !mr.lineItems.isEmpty
+            }
+            .sorted { $0.requestDate > $1.requestDate }
+            .first
+    }
+
+    /// Approved estimate on the selected project, if any. Drives the
+    /// Import from Estimate button — only meaningful when destination
+    /// is a project and that project has an estimate to source from.
+    private var importableEstimate: Estimate? {
+        guard destinationType == .project,
+              let projectID = selectedProjectID else { return nil }
+        return store.estimates
+            .filter { $0.projectID == projectID && !$0.lineItems.isEmpty }
+            .sorted { $0.updatedAt > $1.updatedAt }
+            .first
+    }
+
+    /// Pre-populate quantities + line items from the user's last request.
+    /// Skips fields that are already filled to avoid clobbering work in
+    /// progress (e.g. a partially-typed item description).
+    private func repeatLastRequest() {
+        guard let last = lastRequestForCurrentUser else { return }
+        if !hasLineItems {
+            // Reset the IDs so SwiftUI sees them as new rows and the items
+            // are independent from the source request after edits.
+            lineItems = last.lineItems.map { item in
+                var copy = item
+                copy.id               = UUID()
+                copy.quantityReceived = 0   // start fresh
+                return copy
+            }
+        }
+        if siteLocation.isEmpty       { siteLocation       = last.siteLocation }
+        if selectedSupplierID == nil  { selectedSupplierID = last.supplierID  }
+        if destinationType == .internalUse && last.destinationType != .internalUse {
+            destinationType = last.destinationType
+        }
+        if selectedProjectID == nil      { selectedProjectID      = last.projectID }
+        if selectedMaterialSaleID == nil { selectedMaterialSaleID = last.materialSaleID }
+    }
+
+    /// Convert an estimate's CostCodeItems into MaterialLineItems and
+    /// append. Maps unit string → UnitOfMeasure enum with a fallback to
+    /// `.each` for unrecognized units (legacy estimates may have free-text
+    /// units that don't map cleanly).
+    private func importFromEstimate(_ estimate: Estimate) {
+        let imported = estimate.lineItems.map { ci -> MaterialLineItem in
+            MaterialLineItem(
+                description: ci.description,
+                quantity:    ci.estimatedQuantity,
+                quantityReceived: 0,
+                unit:        UnitOfMeasure(rawValue: ci.unit) ?? .each,
+                unitCost:    ci.unitRate,
+                costCode:    ci.code,
+                notes:       ""
+            )
+        }
+        lineItems.append(contentsOf: imported)
+    }
+
+    /// The Employee record (if any) for the currently signed-in user.
+    /// `store.currentUser` is itself an Employee — used to default Requested
+    /// By so field workers don't have to scroll the picker.
+    private var currentUserEmployee: Employee? { store.currentUser }
+
+    private var openMaterialSales: [MaterialSale] {
+        store.materialSales
+            .filter { !$0.isDeleted }
+            .sorted { $0.saleNumber > $1.saleNumber }
+    }
+
+    /// Quick-actions section — visible only on new requests. Surfaces the
+    /// two repeatable-create paths (Repeat Last Request / Import from
+    /// Estimate) at the top so the field user sees them before scrolling
+    /// through fields they may not need to fill manually.
+    @ViewBuilder
+    private var quickActionsSection: some View {
+        if lastRequestForCurrentUser != nil || importableEstimate != nil {
+            Section {
+                if let last = lastRequestForCurrentUser {
+                    Button {
+                        repeatLastRequest()
+                    } label: {
+                        Label {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("Repeat Last Request").font(.subheadline).bold()
+                                Text("\(last.requestNumber) · \(last.lineItems.count) item\(last.lineItems.count == 1 ? "" : "s")")
+                                    .font(.caption2).foregroundColor(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "arrow.clockwise.circle.fill")
+                                .foregroundColor(.blue)
+                        }
+                    }
+                }
+                if let est = importableEstimate {
+                    Button {
+                        importFromEstimate(est)
+                    } label: {
+                        Label {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("Import from Estimate").font(.subheadline).bold()
+                                Text("\(est.lineItems.count) line item\(est.lineItems.count == 1 ? "" : "s") from this project's estimate")
+                                    .font(.caption2).foregroundColor(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "square.and.arrow.down.fill")
+                                .foregroundColor(.purple)
+                        }
+                    }
+                }
+            } header: {
+                Text("Quick Start")
+            } footer: {
+                Text("Pre-fills line items and supplier from a previous request or this project's estimate.")
+                    .font(.caption2)
+            }
+        }
+    }
+
+    /// Inline validation banner — shows the list of remaining issues so
+    /// the user can fix them before scrolling. Updates live as fields
+    /// change. Hidden when `validationIssues` is empty.
+    private var validationBanner: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("Before saving:", systemImage: "exclamationmark.circle.fill")
+                    .font(.caption).bold()
+                    .foregroundColor(.orange)
+                ForEach(validationIssues, id: \.self) { issue in
+                    HStack(alignment: .top, spacing: 4) {
+                        Text("•").foregroundColor(.orange)
+                        Text(issue).font(.caption).foregroundColor(.primary)
+                    }
+                }
+            }
+            .padding(.vertical, 4)
+        }
+        .listRowBackground(Color.orange.opacity(0.08))
+    }
+
     private var mrDetailsSection: some View {
-        Section("Request Details") {
+        Section {
             HStack {
                 Text("Request #")
+                Text("*").foregroundColor(.red)
                 TextField("MR-0001", text: $requestNumber)
                     .multilineTextAlignment(.trailing).fontDesign(.monospaced)
             }
-            Picker("Project", selection: $selectedProjectID) {
-                Text("None").tag(UUID?.none)
-                ForEach(store.projects.filter { $0.status == .active }) { proj in
-                    Text(proj.name).tag(Optional(proj.id))
+
+            // Destination — drives which downstream picker is shown. Editing
+            // it clears the other two so we never persist a stale combination
+            // that would fail the server-side single-destination check.
+            HStack {
+                Text("Destination")
+                Text("*").foregroundColor(.red)
+                Spacer()
+                Picker("", selection: $destinationType) {
+                    ForEach(MaterialRequestDestinationType.allCases, id: \.self) { d in
+                        Text(d.displayName).tag(d)
+                    }
+                }
+                .labelsHidden()
+            }
+            .onChange(of: destinationType) { newVal in
+                switch newVal {
+                case .project:      selectedMaterialSaleID = nil
+                case .materialSale: selectedProjectID      = nil
+                case .internalUse:
+                    selectedProjectID      = nil
+                    selectedMaterialSaleID = nil
                 }
             }
+
+            if destinationType == .project {
+                HStack {
+                    Text("Project")
+                    Text("*").foregroundColor(.red)
+                    Spacer()
+                    Picker("", selection: $selectedProjectID) {
+                        Text("Select…").tag(UUID?.none)
+                        ForEach(store.projects.filter { $0.status == .active }) { proj in
+                            Text(proj.name).tag(Optional(proj.id))
+                        }
+                    }
+                    .labelsHidden()
+                }
+            }
+
+            if destinationType == .materialSale {
+                HStack {
+                    Text("Material Sale")
+                    Text("*").foregroundColor(.red)
+                    Spacer()
+                    Picker("", selection: $selectedMaterialSaleID) {
+                        Text("Select…").tag(UUID?.none)
+                        ForEach(openMaterialSales) { sale in
+                            Text(sale.saleNumber).tag(Optional(sale.id))
+                        }
+                    }
+                    .labelsHidden()
+                }
+            }
+
+            // Requested By — picker over employees, with a free-text fallback
+            // so MRs entered on behalf of unlisted personnel still record a
+            // name. The "(Other)" tag means selectedRequestedByID is nil and
+            // requestedByName is whatever the user typed.
             HStack {
                 Text("Requested By")
-                TextField("Name", text: $requestedByName).multilineTextAlignment(.trailing)
+                Text("*").foregroundColor(.red)
+                Spacer()
+                Picker("", selection: $selectedRequestedByID) {
+                    Text("Other (type name)").tag(UUID?.none)
+                    ForEach(activeEmployees) { emp in
+                        Text(emp.fullName).tag(Optional(emp.id))
+                    }
+                }
+                .labelsHidden()
             }
+            .onChange(of: selectedRequestedByID) { newVal in
+                if let eid = newVal,
+                   let emp = store.employees.first(where: { $0.id == eid }) {
+                    requestedByName = emp.fullName
+                }
+            }
+            if selectedRequestedByID == nil {
+                HStack {
+                    Text("Name")
+                    TextField("Enter name", text: $requestedByName)
+                        .multilineTextAlignment(.trailing)
+                }
+            }
+
+            // Supplier — optional. When set, downstream PDF/email flows can
+            // address the supplier directly instead of routing through a PO.
+            Picker("Supplier", selection: $selectedSupplierID) {
+                Text("None").tag(UUID?.none)
+                ForEach(store.suppliers.sorted { $0.name < $1.name }) { sup in
+                    Text(sup.name).tag(Optional(sup.id))
+                }
+            }
+
             DatePicker("Request Date", selection: $requestDate, displayedComponents: .date)
             Toggle("Has Required-By Date", isOn: $hasRequiredBy)
             if hasRequiredBy {
@@ -648,6 +1479,11 @@ struct MRCreateEditView: View {
                 ForEach(MaterialRequestStatus.allCases, id: \.self) { s in
                     Text(s.displayName).tag(s)
                 }
+            }
+        } header: {
+            HStack(spacing: 4) {
+                Text("Request Details")
+                Text("* required").font(.caption2).foregroundColor(.secondary)
             }
         }
     }
@@ -673,9 +1509,15 @@ struct MRCreateEditView: View {
                 Label("Add Item", systemImage: "plus.circle")
             }
         } header: {
-            Text("Materials")
+            HStack(spacing: 4) {
+                Text("Materials")
+                Text("*").foregroundColor(.red)
+            }
         } footer: {
-            if !lineItems.isEmpty {
+            if lineItems.isEmpty {
+                Text("Add at least one item to submit this request.")
+                    .font(.caption2).foregroundColor(.secondary)
+            } else {
                 let total = lineItems.reduce(Decimal(0)) { $0 + $1.totalCost }
                 if total > 0 {
                     Text("Estimated total: \(total.currencyString)").font(.footnote)
@@ -690,17 +1532,36 @@ struct MRCreateEditView: View {
             ToastService.shared.error("This request is \(lockedReason.lowercased()) and is locked.")
             return
         }
+
+        // Mirror the server-side single-destination check: refuse to save an
+        // MR whose destinationType is .project / .materialSale without the
+        // matching ID set. Saving it would either fail the DB constraint at
+        // sync time (silent data loss) or persist an inconsistent local row.
+        switch destinationType {
+        case .project where selectedProjectID == nil:
+            ToastService.shared.error("Pick a project for this request, or change destination.")
+            return
+        case .materialSale where selectedMaterialSaleID == nil:
+            ToastService.shared.error("Pick a material sale for this request, or change destination.")
+            return
+        default: break
+        }
+
         var mr = request ?? MaterialRequest(requestNumber: requestNumber)
-        mr.requestNumber   = requestNumber.trimmingCharacters(in: .whitespaces)
-        mr.projectID       = selectedProjectID
-        mr.requestedByName = requestedByName
-        mr.requestDate     = requestDate
-        mr.requiredByDate  = hasRequiredBy ? requiredByDate : nil
-        mr.siteLocation    = siteLocation
-        mr.lineItems       = lineItems
-        mr.notes           = notes
-        mr.status          = status
-        mr.updatedAt       = Date()
+        mr.requestNumber    = requestNumber.trimmingCharacters(in: .whitespaces)
+        mr.destinationType  = destinationType
+        mr.projectID        = destinationType == .project      ? selectedProjectID      : nil
+        mr.materialSaleID   = destinationType == .materialSale ? selectedMaterialSaleID : nil
+        mr.supplierID       = selectedSupplierID
+        mr.requestedByID    = selectedRequestedByID
+        mr.requestedByName  = requestedByName.trimmingCharacters(in: .whitespaces)
+        mr.requestDate      = requestDate
+        mr.requiredByDate   = hasRequiredBy ? requiredByDate : nil
+        mr.siteLocation     = siteLocation
+        mr.lineItems        = lineItems
+        mr.notes            = notes
+        mr.status           = status
+        mr.updatedAt        = Date()
         isNew ? store.addMaterialRequest(mr) : store.updateMaterialRequest(mr)
         dismiss()
     }
@@ -797,6 +1658,276 @@ struct MaterialLineItemEditSheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+    }
+}
+
+// MARK: - MR Receive Sheet
+
+/// Per-line-item receiving UI. Receiver enters how much actually showed up
+/// for each line; status rolls up automatically (partial vs delivered) in
+/// AppStore.receiveMaterialRequest. Pre-fills with the previously-received
+/// quantity so partial deliveries stack across multiple receive events.
+///
+/// PHOTO REQUIREMENT
+///   Final .delivered status is BLOCKED without at least one delivery
+///   photo (packing slip / materials on site). Partial receives are
+///   allowed without a photo so a receiver on a tarmac with bad cellular
+///   isn't stuck with their qty entries unsaved.
+struct MRReceiveSheet: View {
+    @EnvironmentObject var store: AppStore
+    @Environment(\.dismiss) var dismiss
+    let request: MaterialRequest
+    let onConfirm: ([UUID: Decimal], String?) -> Void
+
+    @State private var quantities: [UUID: Decimal]
+
+    // Photo state — selected by PhotosPicker, decoded into UIImage for the
+    // thumbnail, uploaded on Confirm. existingPhotoPath holds the URL
+    // already saved on the MR from a prior partial receive — so a receiver
+    // who's added the photo earlier doesn't have to re-upload to finalize.
+    @State private var photoItem: PhotosPickerItem? = nil
+    @State private var photoImage: UIImage? = nil
+    @State private var existingPhotoPath: String?
+    @State private var isUploading = false
+
+    init(request: MaterialRequest,
+         onConfirm: @escaping ([UUID: Decimal], String?) -> Void) {
+        self.request = request
+        self.onConfirm = onConfirm
+        // Seed with prior received qty so the receiver only edits the delta.
+        var seed: [UUID: Decimal] = [:]
+        for item in request.lineItems { seed[item.id] = item.quantityReceived }
+        _quantities = State(initialValue: seed)
+        _existingPhotoPath = State(initialValue: request.deliveryPhotoURL)
+    }
+
+    private var allFullyReceived: Bool {
+        request.lineItems.allSatisfy { (quantities[$0.id] ?? 0) >= $0.quantity }
+    }
+
+    private var anyShort: Bool {
+        request.lineItems.contains { (quantities[$0.id] ?? 0) < $0.quantity }
+    }
+
+    private var hasPhoto: Bool {
+        photoImage != nil || (existingPhotoPath?.isEmpty == false)
+    }
+
+    /// Confirm is blocked when saving would result in .delivered status
+    /// without a photo. Partial receives are always allowed.
+    private var confirmDisabled: Bool {
+        if isUploading { return true }
+        if allFullyReceived && !hasPhoto { return true }
+        return false
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    ForEach(request.lineItems) { item in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(item.description).font(.subheadline).bold()
+                            HStack {
+                                Text("Requested: \(decStr(item.quantity)) \(item.unit.displayName)")
+                                    .font(.caption).foregroundColor(.secondary)
+                                Spacer()
+                                Text("Received")
+                                    .font(.caption).foregroundColor(.secondary)
+                                TextField("0", value: Binding(
+                                    get: { quantities[item.id] ?? 0 },
+                                    set: { quantities[item.id] = max(0, $0) }
+                                ), format: .number)
+                                    .keyboardType(.decimalPad)
+                                    .multilineTextAlignment(.trailing)
+                                    .frame(width: 70)
+                                    .padding(.horizontal, 6).padding(.vertical, 4)
+                                    .background(Color(.tertiarySystemBackground))
+                                    .cornerRadius(6)
+                                Text(item.unit.displayName)
+                                    .font(.caption).foregroundColor(.secondary)
+                            }
+                            if let q = quantities[item.id], q > item.quantity {
+                                Label("Over by \(decStr(q - item.quantity))", systemImage: "exclamationmark.triangle")
+                                    .font(.caption2).foregroundColor(.orange)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                } header: {
+                    Text("Mark received quantities")
+                } footer: {
+                    if allFullyReceived {
+                        Label("Will mark request as Fully Received", systemImage: "checkmark.circle.fill")
+                            .font(.caption).foregroundColor(.green)
+                    } else if anyShort {
+                        Label("Will mark request as Partial Receipt", systemImage: "shippingbox.and.arrow.backward")
+                            .font(.caption).foregroundColor(.orange)
+                    }
+                }
+
+                // Photo proof — required to flip to .delivered. PhotosPicker
+                // covers both the camera roll and (on iOS 17+) live capture
+                // via the system picker. No custom camera UI needed.
+                Section {
+                    PhotosPicker(
+                        selection: $photoItem,
+                        matching: .images,
+                        photoLibrary: .shared()
+                    ) {
+                        Label(
+                            hasPhoto ? "Replace Photo" : "Attach Delivery Photo",
+                            systemImage: "camera.fill"
+                        )
+                        .foregroundColor(.blue)
+                    }
+                    .onChange(of: photoItem) { item in
+                        Task {
+                            guard let data = try? await item?.loadTransferable(type: Data.self),
+                                  let img = UIImage(data: data) else { return }
+                            photoImage = img
+                        }
+                    }
+                    if let img = photoImage {
+                        Image(uiImage: img)
+                            .resizable().scaledToFit()
+                            .frame(maxHeight: 220)
+                            .cornerRadius(10)
+                    } else if existingPhotoPath != nil {
+                        Label("Photo already on file from earlier delivery", systemImage: "checkmark.seal.fill")
+                            .font(.caption).foregroundColor(.green)
+                    }
+                } header: {
+                    Text("Delivery Photo")
+                } footer: {
+                    if allFullyReceived && !hasPhoto {
+                        Label("Photo required to mark as Fully Received.", systemImage: "exclamationmark.circle.fill")
+                            .font(.caption).foregroundColor(.red)
+                    } else {
+                        Text("Packing slip or photo of delivered material. Required for final delivery sign-off.")
+                            .font(.caption2).foregroundColor(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("Receive — \(request.requestNumber)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { dismiss() }.disabled(isUploading)
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    if isUploading {
+                        ProgressView()
+                    } else {
+                        Button("Confirm") { Task { await confirm() } }
+                            .bold()
+                            .disabled(confirmDisabled)
+                    }
+                }
+            }
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Button("Mark All Fully Received") {
+                        for item in request.lineItems {
+                            quantities[item.id] = item.quantity
+                        }
+                    }
+                    Spacer()
+                    Button("Done") {}
+                }
+            }
+        }
+    }
+
+    /// Upload the new photo (if any) before calling onConfirm. Skips upload
+    /// when only the existing-on-file photo is present — saves bandwidth on
+    /// no-op partial-to-partial saves.
+    private func confirm() async {
+        var pathToSave: String? = existingPhotoPath
+        if let newImage = photoImage {
+            isUploading = true
+            defer { isUploading = false }
+            do {
+                pathToSave = try await DeliveryPhotoService.shared.upload(
+                    image:     newImage,
+                    requestID: request.id,
+                    companyID: request.companyID ?? store.currentCompanyID
+                )
+            } catch {
+                ToastService.shared.error(error.localizedDescription)
+                return
+            }
+        }
+        onConfirm(quantities, pathToSave)
+        dismiss()
+    }
+
+    private func decStr(_ d: Decimal) -> String {
+        let n = NSDecimalNumber(decimal: d)
+        if d == Decimal(Int(truncating: n)) { return "\(Int(truncating: n))" }
+        return n.stringValue
+    }
+}
+
+// MARK: - Delivery Photo Thumbnail
+
+/// Renders a delivery-proof photo from its Supabase Storage path. Resolves
+/// to a signed URL on appear (1h TTL — long enough to view, short enough
+/// that a leaked URL isn't durably useful). Tap to open in a sheet.
+struct DeliveryPhotoThumbnail: View {
+    let storagePath: String
+    @State private var resolvedURL: URL? = nil
+    @State private var showFullScreen = false
+
+    var body: some View {
+        Group {
+            if let url = resolvedURL {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .empty:
+                        ProgressView().frame(maxWidth: .infinity, minHeight: 120)
+                    case .success(let image):
+                        image
+                            .resizable().scaledToFit()
+                            .frame(maxHeight: 220)
+                            .cornerRadius(8)
+                            .onTapGesture { showFullScreen = true }
+                    case .failure:
+                        Label("Couldn't load photo", systemImage: "photo.badge.exclamationmark")
+                            .font(.caption).foregroundColor(.secondary)
+                            .frame(maxWidth: .infinity, minHeight: 120)
+                    @unknown default:
+                        EmptyView()
+                    }
+                }
+            } else {
+                ProgressView()
+                    .frame(maxWidth: .infinity, minHeight: 120)
+                    .task { await resolve() }
+            }
+        }
+        .sheet(isPresented: $showFullScreen) {
+            if let url = resolvedURL {
+                NavigationStack {
+                    AsyncImage(url: url) { phase in
+                        if case .success(let image) = phase {
+                            image.resizable().scaledToFit()
+                        } else {
+                            ProgressView()
+                        }
+                    }
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("Done") { showFullScreen = false }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func resolve() async {
+        resolvedURL = await DeliveryPhotoService.shared.signedURL(for: storagePath)
     }
 }
 
