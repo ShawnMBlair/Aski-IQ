@@ -1,6 +1,7 @@
 // DailyJobReport.swift
 // Aski IQ – Daily Job Report Module
 
+#if canImport(UIKit)
 import Foundation
 import UIKit
 import Combine
@@ -365,3 +366,4 @@ extension AppStore {
 
 // MARK: - Sample-data tracking
 extension DailyJobReport: SampleDataTrackable {}
+#endif

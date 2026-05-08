@@ -16,6 +16,7 @@
 // service and renders the toast over any active scene. No need to touch
 // individual views.
 
+#if canImport(UIKit)
 import SwiftUI
 import UIKit
 import Combine
@@ -220,3 +221,4 @@ private struct ToastView: View {
         }
     }
 }
+#endif

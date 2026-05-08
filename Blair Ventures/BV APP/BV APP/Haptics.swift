@@ -14,6 +14,7 @@
 //
 // Calls are no-ops in tests and on devices that don't support haptics.
 
+#if canImport(UIKit)
 import Foundation
 import UIKit
 
@@ -56,3 +57,4 @@ enum Haptics {
         UISelectionFeedbackGenerator().selectionChanged()
     }
 }
+#endif

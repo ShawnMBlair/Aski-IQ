@@ -29,6 +29,7 @@
 // and also exposed as a "Generate PDF" button on LienWaiverEditSheet
 // so admins can preview / re-mint.
 
+#if canImport(UIKit)
 import UIKit
 import Foundation
 import Supabase
@@ -494,3 +495,4 @@ final class LienWaiverDocumentService {
         return path
     }
 }
+#endif

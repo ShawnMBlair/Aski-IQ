@@ -18,6 +18,7 @@
 // refactor into a polymorphic generator without aligning with the
 // master prompt — see migration header for rationale.
 
+#if canImport(UIKit)
 import Foundation
 import UIKit
 import Combine
@@ -253,3 +254,4 @@ final class SignedMaterialSalePDFGenerator {
         }
     }
 }
+#endif

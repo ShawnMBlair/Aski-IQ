@@ -1,6 +1,7 @@
 // NotificationManager.swift
 // BV APP – Local Notifications (Sprint 12)
 
+#if canImport(UIKit)
 import UserNotifications
 import UIKit
 
@@ -540,3 +541,4 @@ final class NotificationManager {
         UserDefaults.standard.removeObject(forKey: Self.firedTodayKey)
     }
 }
+#endif

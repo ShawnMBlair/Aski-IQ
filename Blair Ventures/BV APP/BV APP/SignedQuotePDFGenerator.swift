@@ -29,6 +29,7 @@
 //   during conversion of quotes that were accepted before this feature
 //   shipped.
 
+#if canImport(UIKit)
 import Foundation
 import UIKit
 import Combine   // for AppStore.objectWillChange used in the storage extension below
@@ -374,3 +375,4 @@ extension AppStore {
         objectWillChange.send()
     }
 }
+#endif

@@ -2,6 +2,7 @@
 // BV APP – Estimate & Quote PDF Generation
 // Uses the same UIGraphicsPDFRenderer approach as FormPDFRenderer / IncidentPDFRenderer
 
+#if canImport(UIKit)
 import UIKit
 import Foundation
 
@@ -2147,3 +2148,4 @@ final class SubContractPDFRenderer {
         return f.string(from: NSDecimalNumber(decimal: d)) ?? "$\(d)"
     }
 }
+#endif

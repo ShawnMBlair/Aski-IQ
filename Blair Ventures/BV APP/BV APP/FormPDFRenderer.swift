@@ -1,6 +1,7 @@
 // FormPDFRenderer.swift
 // BV APP – Legal PDF Generation + Audit Hashing
 
+#if canImport(UIKit)
 import UIKit
 import SwiftUI
 import CryptoKit
@@ -500,3 +501,4 @@ final class FormPDFRenderer {
         }
     }
 }
+#endif
