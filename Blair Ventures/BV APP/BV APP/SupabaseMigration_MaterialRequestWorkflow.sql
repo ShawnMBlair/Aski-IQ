@@ -21,6 +21,11 @@ begin
     end if;
 end $$;
 
+-- Status enum — values must match Swift's MaterialRequestStatus.rawValue
+-- (Procurement.swift). The Swift enum is the established API and is what
+-- the app pushes via the `status` column today. The DB-only values
+-- (pending / rejected / closed) are kept for future-Phase routing flows
+-- the app doesn't emit yet.
 do $$
 begin
     if not exists (
@@ -29,15 +34,35 @@ begin
         create type material_request_status as enum (
             'draft',
             'submitted',
-            'pending',
+            'pending',     -- DB-only; future use
             'approved',
-            'rejected',
+            'rejected',    -- DB-only; future use
             'ordered',
             'partial',
-            'received',
-            'closed',
+            'delivered',   -- ↔ Swift .delivered (NOT 'received'; align with rawValue)
+            'closed',      -- DB-only; future use
             'cancelled'
         );
+    end if;
+    -- Idempotent: if the enum was previously created with 'received'
+    -- (pre-fix) and not yet wired into a typed column, normalize.
+    -- Wrapped in another guard because alter type ... add value if not
+    -- exists is non-transactional and only runs on >= PG12.
+    if exists (
+        select 1 from pg_type t
+        join pg_enum e on e.enumtypid = t.oid
+        where t.typname = 'material_request_status'
+        and e.enumlabel = 'received'
+    ) and not exists (
+        select 1 from pg_type t
+        join pg_enum e on e.enumtypid = t.oid
+        where t.typname = 'material_request_status'
+        and e.enumlabel = 'delivered'
+    ) then
+        -- Add 'delivered' alongside the legacy 'received' so both are
+        -- accepted; data backfill (received → delivered) belongs in a
+        -- separate one-shot migration once any rows reference it.
+        alter type material_request_status add value 'delivered';
     end if;
 end $$;
 
@@ -117,6 +142,25 @@ on public.material_requests(status);
 
 create index if not exists idx_material_requests_destination_type
 on public.material_requests(destination_type);
+
+-- Foreign key on material_sales_id — wrapped in a DO block so re-runs
+-- don't error on the duplicate constraint. ON DELETE SET NULL because
+-- a material sale being deleted shouldn't cascade-delete its sourcing
+-- requests; the audit trail should remain pointing at the (now nil)
+-- former destination.
+do $$
+begin
+    if not exists (
+        select 1 from pg_constraint
+        where conname = 'material_requests_material_sales_id_fkey'
+    ) then
+        alter table public.material_requests
+        add constraint material_requests_material_sales_id_fkey
+        foreign key (material_sales_id)
+        references public.material_sales(id)
+        on delete set null;
+    end if;
+end $$;
 
 -- =========================================================
 -- 4. Guardrail: only one destination should be selected
@@ -325,6 +369,14 @@ execute function public.log_material_request_status_change();
 -- =========================================================
 -- 9. Helper function: recalculate MR total from line items
 -- =========================================================
+-- IMPORTANT: when no child rows exist (typical Phase 1 state — Swift
+-- still uses embedded line_items_json on the parent row), preserve the
+-- value already on the parent rather than forcing it to 0. Otherwise
+-- any UPDATE that touches a child-less request would silently zero out
+-- the total the client just pushed.
+-- Once the Swift sync starts populating material_request_items (Phase 3
+-- invoice-matching prep), child rows become the source of truth and the
+-- coalesce naturally falls through to the SUM.
 create or replace function public.recalculate_material_request_total(
     p_material_request_id uuid
 )
@@ -339,7 +391,7 @@ begin
         select sum(mri.estimated_total)
         from public.material_request_items mri
         where mri.material_request_id = p_material_request_id
-    ), 0)
+    ), mr.total_estimated_cost)
     where mr.id = p_material_request_id;
 end;
 $$;

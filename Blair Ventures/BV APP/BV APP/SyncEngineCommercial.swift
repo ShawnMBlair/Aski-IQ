@@ -1113,6 +1113,7 @@ extension SyncEngine {
                     let request_date, required_by_date: String?
                     let notes, site_location: String?
                     let line_items_json: String?
+                    let total_estimated_cost: Decimal
                     // Audit fields — set by the typed transition methods on
                     // AppStore. Pushing them so the DB trigger captures
                     // who/when in material_request_audit metadata.
@@ -1142,6 +1143,11 @@ extension SyncEngine {
                     notes:             mr.notes.isEmpty        ? nil : mr.notes,
                     site_location:     mr.siteLocation.isEmpty ? nil : mr.siteLocation,
                     line_items_json:   jsonString(mr.lineItems),
+                    // Push the client-computed total so the DB column reflects
+                    // the canonical value even before child-table sync lands.
+                    // The recalc trigger preserves this on no-children updates;
+                    // it'll naturally take over once children exist (Phase 3).
+                    total_estimated_cost: mr.estimatedTotal,
                     submitted_by_user_id: mr.submittedByID?.uuidString,
                     approved_by_user_id:  mr.approvedByID?.uuidString,
                     received_by_user_id:  mr.receivedByID?.uuidString,
