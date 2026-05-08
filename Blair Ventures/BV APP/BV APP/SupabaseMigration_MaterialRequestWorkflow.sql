@@ -165,6 +165,28 @@ begin
 end $$;
 
 -- =========================================================
+-- 3a. Backfill destination_type for existing rows
+-- =========================================================
+-- The DEFAULT on destination_type is 'internal', which means legacy rows
+-- (created before this migration) all get destination_type='internal'
+-- when the column is added. Section 4's CHECK constraint then rejects
+-- any such row that has project_id or material_sales_id set, blocking
+-- the entire migration.
+--
+-- Backfill those rows BEFORE the constraint is added so the constraint
+-- creation succeeds. Idempotent — re-running this on a fully-migrated
+-- database is a no-op since the WHERE clauses won't match.
+update public.material_requests
+set destination_type = 'project'
+where project_id is not null
+  and destination_type = 'internal';
+
+update public.material_requests
+set destination_type = 'material_sales'
+where material_sales_id is not null
+  and destination_type = 'internal';
+
+-- =========================================================
 -- 4. Guardrail: only one destination should be selected
 -- =========================================================
 alter table public.material_requests
