@@ -116,6 +116,8 @@ add column if not exists status material_request_status not null default 'draft'
 add column if not exists pdf_storage_path text null,
 add column if not exists pdf_generated_at timestamptz null,
 add column if not exists delivery_photo_url text null,
+add column if not exists receipt_scan_path text null,
+add column if not exists requested_by_email text null,
 add column if not exists received_by_user_id uuid null references auth.users(id),
 add column if not exists received_at timestamptz null,
 add column if not exists ordered_at timestamptz null,

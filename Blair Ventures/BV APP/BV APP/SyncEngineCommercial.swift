@@ -1034,7 +1034,7 @@ extension SyncEngine {
                 let id, request_number, status: String
                 let project_id, supplier_id, material_sales_id, requested_by_employee_id: String?
                 let destination_type: String?
-                let requested_by_name: String?
+                let requested_by_name, requested_by_email: String?
                 let request_date, required_by_date: String?
                 let notes, site_location: String?
                 let line_items_json: String?
@@ -1045,8 +1045,9 @@ extension SyncEngine {
                 // PDF tracking
                 let pdf_storage_path: String?
                 let pdf_generated_at: String?
-                // Delivery proof
+                // Delivery proof + reference scan
                 let delivery_photo_url: String?
+                let receipt_scan_path: String?
             }
             let rows: [Row] = try await supabase
                 .from(SupabaseTable.materialRequests)
@@ -1070,6 +1071,7 @@ extension SyncEngine {
                 mr.supplierID       = row.supplier_id.flatMap { UUID(uuidString: $0) }
                 mr.requestedByID    = row.requested_by_employee_id.flatMap { UUID(uuidString: $0) }
                 mr.requestedByName  = row.requested_by_name ?? ""
+                mr.requestedByEmail = row.requested_by_email
                 mr.requestDate      = parseDate(row.request_date) ?? Date()
                 mr.requiredByDate   = parseDate(row.required_by_date)
                 mr.notes            = row.notes ?? ""
@@ -1087,6 +1089,7 @@ extension SyncEngine {
                 mr.pdfStoragePath   = row.pdf_storage_path
                 mr.pdfGeneratedAt   = parseDate(row.pdf_generated_at)
                 mr.deliveryPhotoURL = row.delivery_photo_url
+                mr.receiptScanPath  = row.receipt_scan_path
                 mr.syncStatus       = .synced
                 merged.removeAll { $0.id == uuid }
                 merged.append(mr)
@@ -1109,7 +1112,7 @@ extension SyncEngine {
                     let id, company_id, request_number, status: String
                     let destination_type: String
                     let project_id, supplier_id, material_sales_id, requested_by_employee_id: String?
-                    let requested_by_name: String?
+                    let requested_by_name, requested_by_email: String?
                     let request_date, required_by_date: String?
                     let notes, site_location: String?
                     let line_items_json: String?
@@ -1123,6 +1126,7 @@ extension SyncEngine {
                     let pdf_storage_path: String?
                     let pdf_generated_at: String?
                     let delivery_photo_url: String?
+                    let receipt_scan_path: String?
                     let is_deleted: Bool
                     let deleted_at: String?
                     let deleted_by: String?
@@ -1137,7 +1141,8 @@ extension SyncEngine {
                     supplier_id:       mr.supplierID?.uuidString,
                     material_sales_id: mr.materialSaleID?.uuidString,
                     requested_by_employee_id: mr.requestedByID?.uuidString,
-                    requested_by_name: mr.requestedByName.isEmpty ? nil : mr.requestedByName,
+                    requested_by_name:  mr.requestedByName.isEmpty ? nil : mr.requestedByName,
+                    requested_by_email: mr.requestedByEmail,
                     request_date:      isoDateFmt.string(from: mr.requestDate),
                     required_by_date:  mr.requiredByDate.map { isoDateFmt.string(from: $0) },
                     notes:             mr.notes.isEmpty        ? nil : mr.notes,
@@ -1160,6 +1165,7 @@ extension SyncEngine {
                     pdf_storage_path:  mr.pdfStoragePath,
                     pdf_generated_at:  mr.pdfGeneratedAt.map { isoFull.string(from: $0) },
                     delivery_photo_url: mr.deliveryPhotoURL,
+                    receipt_scan_path:  mr.receiptScanPath,
                     is_deleted:        mr.isDeleted,
                     deleted_at:        mr.deletedAt.map { isoFull.string(from: $0) },
                     deleted_by:        mr.deletedBy

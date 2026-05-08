@@ -135,6 +135,14 @@ struct MaterialRequest: Identifiable, Codable, Equatable {
     var projectID:       UUID?
     var requestedByID:   UUID?
     var requestedByName: String = ""
+    /// Email of the person making the request. Auto-filled from the
+    /// selected employee record (Employee.email) when the picker is used,
+    /// editable directly when "Other" is selected. Optional because not
+    /// every employee has an email on file (field workers / subs). When
+    /// present, downstream flows can CC the requester on supplier dispatch
+    /// and send approval-status notifications without dragging in a
+    /// separate email lookup.
+    var requestedByEmail: String? = nil
 
     // Dates
     var requestDate:     Date   = Date()
@@ -189,6 +197,15 @@ struct MaterialRequest: Identifiable, Codable, Equatable {
     // partials without it but cannot fully close out a request without
     // photographic proof of the delivery.
     var deliveryPhotoURL: String? = nil
+
+    // Reference document scanned at request time — supplier quote, paper
+    // receipt, hand-written list. Captured via VisionKit's document
+    // scanner, multi-page, saved as a single PDF in the `contracts`
+    // bucket alongside delivery photos. Optional; kept as a separate
+    // field from deliveryPhotoURL because the two represent different
+    // moments in the workflow (creation vs receipt) and operators want
+    // to see them in different sections of the detail view.
+    var receiptScanPath: String? = nil
 
     // MARK: Sample data tracking
     // Populated only by SampleDataSeeder; immutable post-insert via DB

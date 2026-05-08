@@ -3,6 +3,7 @@
 
 import SwiftUI
 import PhotosUI
+import VisionKit
 
 // MARK: - Phase 9 Locked Banner (shared by MR + PO create-edit views)
 
@@ -579,6 +580,14 @@ struct MRDetailView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Requested By").font(.caption2).foregroundColor(.secondary)
                             Text(local.requestedByName).font(.caption).bold()
+                            // Email subtitle when on file — tappable so the
+                            // PM can ping the requester directly without
+                            // copy-pasting into Mail.
+                            if let email = local.requestedByEmail, !email.isEmpty {
+                                Link(email, destination: URL(string: "mailto:\(email)") ?? URL(string: "https://example.com")!)
+                                    .font(.caption2)
+                                    .foregroundColor(.blue)
+                            }
                         }
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Date").font(.caption2).foregroundColor(.secondary)
@@ -704,6 +713,18 @@ struct MRDetailView: View {
                         }
                     } label: {
                         Text("Approved").font(.caption).foregroundColor(.secondary)
+                    }
+                    .padding(.horizontal).padding(.top, 12)
+                }
+
+                // Reference document scanned at create time (supplier
+                // receipt / quote / hand-written list). Tap "View" to open
+                // the PDF via a signed URL in QuickLook.
+                if let scanPath = local.receiptScanPath, !scanPath.isEmpty {
+                    GroupBox {
+                        ReceiptScanRow(storagePath: scanPath)
+                    } label: {
+                        Text("Reference Document").font(.caption).foregroundColor(.secondary)
                     }
                     .padding(.horizontal).padding(.top, 12)
                 }
@@ -1030,6 +1051,7 @@ struct MRCreateEditView: View {
     @State private var selectedSupplierID: UUID?
     @State private var selectedRequestedByID: UUID?
     @State private var requestedByName: String
+    @State private var requestedByEmail: String
     @State private var requestDate: Date
     @State private var hasRequiredBy: Bool
     @State private var requiredByDate: Date
@@ -1040,6 +1062,13 @@ struct MRCreateEditView: View {
 
     @State private var showAddLine   = false
     @State private var editingLineIdx: Int? = nil
+    @State private var showDocumentScanner = false
+    @State private var receiptScanPath: String?
+    @State private var isUploadingReceipt = false
+    /// Pre-generated row ID for new requests so storage uploads (receipt
+    /// scan) land at the same path the saved row will reference. Without
+    /// this, save() would mint a fresh UUID and the scan would orphan.
+    @State private var pendingRequestID: UUID
 
     init(request: MaterialRequest?, preselectedProjectID: UUID?) {
         self.request              = request
@@ -1057,6 +1086,9 @@ struct MRCreateEditView: View {
         _selectedSupplierID     = State(initialValue: request?.supplierID)
         _selectedRequestedByID  = State(initialValue: request?.requestedByID)
         _requestedByName        = State(initialValue: request?.requestedByName ?? "")
+        _requestedByEmail       = State(initialValue: request?.requestedByEmail ?? "")
+        _receiptScanPath        = State(initialValue: request?.receiptScanPath)
+        _pendingRequestID       = State(initialValue: request?.id ?? UUID())
         _requestDate            = State(initialValue: request?.requestDate ?? Date())
         _hasRequiredBy          = State(initialValue: request?.requiredByDate != nil)
         _requiredByDate         = State(initialValue: request?.requiredByDate ?? Calendar.current.date(byAdding: .day, value: 7, to: Date())!)
@@ -1103,6 +1135,7 @@ struct MRCreateEditView: View {
                 if !validationIssues.isEmpty { validationBanner }
                 mrDetailsSection
                 mrLineItemsSection
+                receiptScanSection
                 Section("Notes") {
                     TextField("Additional details or instructions", text: $notes, axis: .vertical).lineLimit(3)
                 }
@@ -1137,6 +1170,10 @@ struct MRCreateEditView: View {
                     if let me = currentUserEmployee {
                         selectedRequestedByID = me.id
                         requestedByName       = me.fullName
+                        if requestedByEmail.isEmpty,
+                           let myEmail = me.email, !myEmail.isEmpty {
+                            requestedByEmail = myEmail
+                        }
                     } else {
                         requestedByName = store.currentUser?.fullName ?? ""
                     }
@@ -1151,6 +1188,71 @@ struct MRCreateEditView: View {
             )) { wrap in
                 MaterialLineItemEditSheet(item: lineItems[wrap.value]) { lineItems[wrap.value] = $0 }
             }
+            .sheet(isPresented: $showDocumentScanner) {
+                // System document scanner — handles edge detection,
+                // multi-page capture, and Save / Cancel via the wrapper.
+                DocumentScannerView { scan in
+                    guard let scan = scan else { return }
+                    Task { await uploadScannedReceipt(scan) }
+                }
+                .ignoresSafeArea()
+            }
+        }
+    }
+
+    /// Receipt / reference document section — VisionKit document scanner
+    /// for supplier receipts, quotes, hand-written lists, etc. Saves a
+    /// multi-page PDF to Supabase Storage on the request row. Optional —
+    /// not in the validation gate.
+    private var receiptScanSection: some View {
+        Section {
+            if isUploadingReceipt {
+                HStack {
+                    ProgressView()
+                    Text("Uploading…").font(.caption).foregroundColor(.secondary)
+                }
+            } else if let path = receiptScanPath, !path.isEmpty {
+                HStack {
+                    Label("Receipt attached", systemImage: "doc.text.fill")
+                        .foregroundColor(.green)
+                    Spacer()
+                    Button("Replace") { showDocumentScanner = true }
+                        .font(.caption)
+                }
+                Button(role: .destructive) {
+                    receiptScanPath = nil
+                } label: {
+                    Label("Remove", systemImage: "trash")
+                }
+            } else {
+                Button {
+                    showDocumentScanner = true
+                } label: {
+                    Label("Scan Receipt or Quote", systemImage: "doc.viewfinder")
+                        .foregroundColor(.blue)
+                }
+            }
+        } header: {
+            Text("Reference Document")
+        } footer: {
+            Text("Scan a supplier receipt, quote, or hand-written list. Auto-detects edges and supports multi-page capture.")
+                .font(.caption2)
+        }
+    }
+
+    private func uploadScannedReceipt(_ scan: VNDocumentCameraScan) async {
+        isUploadingReceipt = true
+        defer { isUploadingReceipt = false }
+        do {
+            let path = try await ReceiptScanService.shared.upload(
+                scan: scan,
+                requestID: pendingRequestID,   // stable across scan + save
+                companyID: request?.companyID ?? store.currentCompanyID
+            )
+            receiptScanPath = path
+            ToastService.shared.success("Receipt scan attached.")
+        } catch {
+            ToastService.shared.error(error.localizedDescription)
         }
     }
 
@@ -1447,6 +1549,12 @@ struct MRCreateEditView: View {
                 if let eid = newVal,
                    let emp = store.employees.first(where: { $0.id == eid }) {
                     requestedByName = emp.fullName
+                    // Auto-pull email from the employee record so users
+                    // don't re-type it. They can still override the field
+                    // below if the employee has multiple addresses.
+                    if let empEmail = emp.email, !empEmail.isEmpty {
+                        requestedByEmail = empEmail
+                    }
                 }
             }
             if selectedRequestedByID == nil {
@@ -1455,6 +1563,18 @@ struct MRCreateEditView: View {
                     TextField("Enter name", text: $requestedByName)
                         .multilineTextAlignment(.trailing)
                 }
+            }
+            // Email — visible whether picker or "Other" is selected. Pre-fills
+            // from the employee record but stays editable: a worker might want
+            // CCs to a personal address, or office staff might want notices
+            // sent to a shared inbox instead.
+            HStack {
+                Text("Email")
+                TextField("name@company.com", text: $requestedByEmail)
+                    .multilineTextAlignment(.trailing)
+                    .textInputAutocapitalization(.never)
+                    .keyboardType(.emailAddress)
+                    .autocorrectionDisabled()
             }
 
             // Supplier — optional. When set, downstream PDF/email flows can
@@ -1548,6 +1668,11 @@ struct MRCreateEditView: View {
         }
 
         var mr = request ?? MaterialRequest(requestNumber: requestNumber)
+        // Pin the row ID to the value used by any in-flight uploads
+        // (receipt scans). For edits this is a no-op (matches request.id);
+        // for new rows it overrides the freshly-minted UUID from the
+        // initializer so storage paths and the saved row stay in sync.
+        mr.id               = pendingRequestID
         mr.requestNumber    = requestNumber.trimmingCharacters(in: .whitespaces)
         mr.destinationType  = destinationType
         mr.projectID        = destinationType == .project      ? selectedProjectID      : nil
@@ -1555,12 +1680,15 @@ struct MRCreateEditView: View {
         mr.supplierID       = selectedSupplierID
         mr.requestedByID    = selectedRequestedByID
         mr.requestedByName  = requestedByName.trimmingCharacters(in: .whitespaces)
+        let trimmedEmail    = requestedByEmail.trimmingCharacters(in: .whitespaces)
+        mr.requestedByEmail = trimmedEmail.isEmpty ? nil : trimmedEmail
         mr.requestDate      = requestDate
         mr.requiredByDate   = hasRequiredBy ? requiredByDate : nil
         mr.siteLocation     = siteLocation
         mr.lineItems        = lineItems
         mr.notes            = notes
         mr.status           = status
+        mr.receiptScanPath  = receiptScanPath
         mr.updatedAt        = Date()
         isNew ? store.addMaterialRequest(mr) : store.updateMaterialRequest(mr)
         dismiss()
@@ -1928,6 +2056,46 @@ struct DeliveryPhotoThumbnail: View {
 
     private func resolve() async {
         resolvedURL = await DeliveryPhotoService.shared.signedURL(for: storagePath)
+    }
+}
+
+// MARK: - Receipt Scan Row
+
+/// Displays a receipt-scan PDF attached to a Material Request. Resolves
+/// the storage path to a signed URL on appear; tap to open the PDF in
+/// the system viewer (QuickLook via Safari View if iOS handles it).
+struct ReceiptScanRow: View {
+    let storagePath: String
+    @State private var resolvedURL: URL? = nil
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "doc.text.fill")
+                .font(.title3)
+                .foregroundColor(.purple)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Scanned receipt").font(.subheadline).bold()
+                if resolvedURL == nil {
+                    Text("Resolving…").font(.caption2).foregroundColor(.secondary)
+                } else {
+                    Text("PDF · multi-page supported")
+                        .font(.caption2).foregroundColor(.secondary)
+                }
+            }
+            Spacer()
+            if let url = resolvedURL {
+                Link("View", destination: url)
+                    .font(.caption).bold()
+            } else {
+                ProgressView()
+            }
+        }
+        .padding(.vertical, 4)
+        .task { await resolve() }
+    }
+
+    private func resolve() async {
+        resolvedURL = await ReceiptScanService.shared.signedURL(for: storagePath)
     }
 }
 
