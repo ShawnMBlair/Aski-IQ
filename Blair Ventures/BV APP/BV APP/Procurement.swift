@@ -780,6 +780,23 @@ extension AppStore {
         Task { await SyncEngine.shared.pushPendingPurchaseOrders() }
     }
 
+    /// Mark a PO as sent to the supplier. Called after the email dispatch
+    /// succeeds (PurchaseOrderPDFGenerator.emailToSupplier). Just flips
+    /// status so the audit trigger captures the transition; the actual
+    /// dispatch happens client-side via Resend.
+    func markPurchaseOrderSent(_ po: PurchaseOrder) {
+        guard requireRole([.projectManager, .officeAdmin, .manager, .executive],
+                          action: "send_purchase_order") else { return }
+        guard let idx = purchaseOrders.firstIndex(where: { $0.id == po.id }) else { return }
+        var updated = po
+        updated.status     = .sent
+        updated.updatedAt  = Date()
+        updated.syncStatus = .pending
+        objectWillChange.send()
+        purchaseOrders[idx] = updated
+        Task { await SyncEngine.shared.pushPendingPurchaseOrders() }
+    }
+
     func deletePurchaseOrder(id: UUID) {
         guard requireRole([.officeAdmin, .manager, .executive],
                           action: "delete_purchase_order") else { return }

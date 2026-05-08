@@ -2328,6 +2328,7 @@ struct PODetailView: View {
     @State private var local: PurchaseOrder
     @State private var showEdit = false
     @State private var showDeleteAlert = false
+    @State private var isSendingToSupplier = false
 
     init(po: PurchaseOrder) {
         self.po = po
@@ -2421,7 +2422,34 @@ struct PODetailView: View {
                 // Actions
                 VStack(spacing: 10) {
                     if local.status == .draft {
-                        poActionButton("Mark as Sent", icon: "paperplane.fill", color: .blue) { transitionPO(to: .sent) }
+                        // First-class send: renders the PO PDF, registers
+                        // it on the project's doc grid, emails the supplier
+                        // (with company email CC'd), then flips status to
+                        // .sent on dispatch success. Falls back to a toast
+                        // when no supplier email is on file rather than
+                        // silently flipping status.
+                        if isSendingToSupplier {
+                            HStack {
+                                ProgressView()
+                                Text("Sending…").font(.caption).foregroundColor(.secondary)
+                            }
+                            .frame(maxWidth: .infinity).padding(.vertical, 12)
+                        } else {
+                            poActionButton("Send to Supplier", icon: "envelope.fill", color: .blue) {
+                                Task { await sendPOToSupplier() }
+                            }
+                            // Cheap escape hatch: if the user wants to flip
+                            // status without emailing (e.g. they faxed it,
+                            // or already sent out-of-band), keep the
+                            // legacy manual transition under a quieter
+                            // outline button.
+                            Button("Mark as sent without emailing") {
+                                store.markPurchaseOrderSent(local)
+                                refreshLocal()
+                            }
+                            .font(.caption).foregroundColor(.secondary)
+                            .padding(.top, 2)
+                        }
                     }
                     if local.status == .sent {
                         poActionButton("Confirm Receipt Pending", icon: "checkmark.circle", color: .purple) { transitionPO(to: .confirmed) }
@@ -2482,6 +2510,22 @@ struct PODetailView: View {
         updated.updatedAt = Date()
         store.updatePurchaseOrder(updated)
         refreshLocal()
+    }
+
+    /// Render PO PDF + email it to the supplier. Status flips to .sent
+    /// only on dispatch success — failures keep the PO in .draft so the
+    /// user can retry after fixing the email or supplier record.
+    private func sendPOToSupplier() async {
+        isSendingToSupplier = true
+        defer { isSendingToSupplier = false }
+        #if canImport(UIKit)
+        let ok = await PurchaseOrderPDFGenerator.shared.emailToSupplier(po: local, store: store)
+        if ok {
+            store.markPurchaseOrderSent(local)
+            ToastService.shared.success("Sent to \(local.supplierName).")
+            refreshLocal()
+        }
+        #endif
     }
 
     private func refreshLocal() {

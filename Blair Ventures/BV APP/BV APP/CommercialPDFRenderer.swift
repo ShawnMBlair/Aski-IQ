@@ -2436,4 +2436,255 @@ final class MaterialRequestPDFRenderer {
         return f.string(from: NSDecimalNumber(decimal: d)) ?? "$\(d)"
     }
 }
+
+// MARK: - Purchase Order PDF Renderer
+// Supplier-facing dispatch document. Generated on demand when the PO is
+// sent to the supplier — not stored persistently like the MR approval
+// PDF, since the operative copy is the one in the supplier's inbox plus
+// whatever ProjectDocument ends up registered against the parent project.
+
+final class PurchaseOrderPDFRenderer {
+
+    private let po:           PurchaseOrder
+    private let projectName:  String?
+    private let c = PDFCanvas()
+
+    private let df: DateFormatter = {
+        let f = DateFormatter(); f.dateStyle = .medium; f.timeStyle = .none; return f
+    }()
+
+    init(po: PurchaseOrder, projectName: String? = nil) {
+        self.po          = po
+        self.projectName = projectName
+    }
+
+    func render() -> Data {
+        let bounds = CGRect(x: 0, y: 0, width: c.pageW, height: c.pageH)
+        return UIGraphicsPDFRenderer(bounds: bounds).pdfData { ctx in
+            c.ctx = ctx
+            ctx.beginPage()
+            c.posY = c.margin
+
+            drawHeader()
+            c.hr(thick: true, color: c.clrBlue)
+            drawSupplierBlock()
+            c.hr(thick: false, color: c.clrLight)
+            if !po.lineItems.isEmpty {
+                drawLineItemsTable()
+                c.hr(thick: false, color: c.clrLight)
+                drawTotals()
+            }
+            if !po.terms.isEmpty {
+                drawTextSection("TERMS", text: po.terms)
+            }
+            if !po.notes.isEmpty {
+                drawTextSection("NOTES", text: po.notes)
+            }
+            c.hr(thick: true, color: c.clrBlue)
+            drawFooter()
+        }
+    }
+
+    private func drawHeader() {
+        let settings = AppSettings.shared
+        let companyName = settings.companyName.isEmpty ? "BLAIR VENTURES" : settings.companyName.uppercased()
+
+        let logoSize: CGFloat = 50
+        var nameX = c.margin
+        if let logo = UIImage(named: "AskiIQPrimaryLogo") {
+            let rect = CGRect(x: c.margin, y: c.posY - 4, width: logoSize, height: logoSize)
+            logo.draw(in: rect)
+            nameX = c.margin + logoSize + 12
+        }
+
+        c.put(companyName, font: c.fCo, color: c.clrBlue,
+              x: nameX, y: c.posY, w: c.cW - 130 - (nameX - c.margin), h: 26)
+        c.drawBadge("PURCHASE ORDER", color: c.clrBlue,
+                    rightX: c.pageW - c.margin, topY: c.posY + 4)
+        c.posY += 30
+        c.put(po.poNumber, font: c.fMon, color: c.clrDark,
+              x: nameX, y: c.posY, w: c.cW - (nameX - c.margin), h: 14)
+        c.posY += 16
+        var parts: [String] = []
+        if !settings.companyAddress.isEmpty { parts.append(settings.companyAddress) }
+        if !settings.companyPhone.isEmpty   { parts.append(settings.companyPhone)   }
+        if !settings.companyEmail.isEmpty   { parts.append(settings.companyEmail)   }
+        if !parts.isEmpty {
+            c.put(parts.joined(separator: "  |  "), font: c.fCap, color: c.clrMid,
+                  x: nameX, y: c.posY, w: c.cW - (nameX - c.margin), h: 12)
+            c.posY += 14
+        }
+        if c.posY < logoSize + 4 { c.posY = logoSize + 4 }
+        c.posY += 4
+    }
+
+    private func drawSupplierBlock() {
+        let col1W: CGFloat = c.cW * 0.54
+        let col2X = c.margin + col1W + 20
+        let col2W = c.cW - col1W - 20
+        let startY = c.posY
+
+        c.put("SUPPLIER", font: c.fSec, color: c.clrBlue,
+              x: c.margin, y: c.posY, w: col1W, h: 13)
+        c.posY += 16
+        if !po.supplierName.isEmpty {
+            c.put(po.supplierName,
+                  font: UIFont.systemFont(ofSize: 10.5, weight: .semibold), color: c.clrDark,
+                  x: c.margin, y: c.posY, w: col1W, h: 14)
+            c.posY += 16
+        }
+        if !po.deliveryAddress.isEmpty {
+            c.put("DELIVER TO", font: c.fLbl, color: c.clrMid,
+                  x: c.margin, y: c.posY, w: col1W, h: 12)
+            c.posY += 13
+            let h = c.textH(po.deliveryAddress, width: col1W, font: c.fVal)
+            c.putWrap(po.deliveryAddress, font: c.fVal, color: c.clrDark,
+                      x: c.margin, y: c.posY, w: col1W, h: h + 4)
+            c.posY += h + 6
+        }
+
+        var pairs: [(String, String)] = [
+            ("Issue Date", df.string(from: po.issueDate)),
+        ]
+        if let req = po.requiredDate {
+            pairs.append(("Required By", df.string(from: req)))
+        }
+        if let proj = projectName, !proj.isEmpty {
+            pairs.append(("Project", proj))
+        }
+        pairs.append(("Status", po.status.displayName))
+
+        var rightY = startY
+        for (lbl, val) in pairs {
+            c.put(lbl + ":", font: c.fLbl, color: c.clrMid,
+                  x: col2X, y: rightY, w: 90, h: 14)
+            c.put(val, font: c.fVal, color: c.clrDark,
+                  x: col2X + 92, y: rightY, w: col2W - 92, h: 14)
+            rightY += 16
+        }
+        c.posY = max(c.posY, rightY) + 8
+    }
+
+    private func drawLineItemsTable() {
+        c.ensureSpace(50)
+        c.put("LINE ITEMS", font: c.fSec, color: c.clrBlue,
+              x: c.margin, y: c.posY, w: 200, h: 12)
+        c.posY += 14
+
+        let descW: CGFloat = c.cW * 0.50
+        let unitW: CGFloat = c.cW * 0.10
+        let qtyW:  CGFloat = c.cW * 0.10
+        let costW: CGFloat = c.cW * 0.14
+        let amtW:  CGFloat = c.cW - descW - unitW - qtyW - costW
+        let col2 = c.margin + descW
+        let col3 = col2 + unitW
+        let col4 = col3 + qtyW
+        let col5 = col4 + costW
+
+        UIColor(white: 0.94, alpha: 1).setFill()
+        UIBezierPath(rect: CGRect(x: c.margin, y: c.posY, width: c.cW, height: 16)).fill()
+
+        c.put("DESCRIPTION", font: c.fSec, color: c.clrMid,
+              x: c.margin + 4, y: c.posY + 2, w: descW - 6, h: 12)
+        c.put("UNIT", font: c.fSec, color: c.clrMid,
+              x: col2, y: c.posY + 2, w: unitW - 4, h: 12, align: .center)
+        c.put("QTY", font: c.fSec, color: c.clrMid,
+              x: col3, y: c.posY + 2, w: qtyW - 4, h: 12, align: .right)
+        c.put("UNIT COST", font: c.fSec, color: c.clrMid,
+              x: col4, y: c.posY + 2, w: costW - 4, h: 12, align: .right)
+        c.put("AMOUNT", font: c.fSec, color: c.clrMid,
+              x: col5, y: c.posY + 2, w: amtW - 4, h: 12, align: .right)
+        c.posY += 18
+
+        for (i, item) in po.lineItems.enumerated() {
+            let descText = item.costCode.isEmpty
+                ? item.description
+                : "[\(item.costCode)]  \(item.description)"
+            let descH = max(14, c.textH(descText, width: descW - 8, font: c.fVal))
+            let rowH  = descH + 6
+            c.ensureSpace(rowH + 4)
+
+            let bg = i % 2 == 0 ? UIColor.white : UIColor(white: 0.97, alpha: 1)
+            bg.setFill()
+            UIBezierPath(rect: CGRect(x: c.margin, y: c.posY, width: c.cW, height: rowH)).fill()
+
+            c.putWrap(descText, font: c.fVal, color: c.clrDark,
+                      x: c.margin + 4, y: c.posY + 2, w: descW - 8, h: descH)
+            c.put(item.unit.displayName, font: c.fVal, color: c.clrDark,
+                  x: col2, y: c.posY + 2, w: unitW - 4, h: 14, align: .center)
+            c.put(decStr(item.quantity), font: c.fVal, color: c.clrDark,
+                  x: col3, y: c.posY + 2, w: qtyW - 4, h: 14, align: .right)
+            c.put(currStr(item.unitCost), font: c.fVal, color: c.clrDark,
+                  x: col4, y: c.posY + 2, w: costW - 4, h: 14, align: .right)
+            c.put(currStr(item.totalCost), font: c.fMon, color: c.clrDark,
+                  x: col5, y: c.posY + 2, w: amtW - 4, h: 14, align: .right)
+            c.posY += rowH
+        }
+    }
+
+    private func drawTotals() {
+        c.ensureSpace(60)
+        let labelW: CGFloat = 100
+        let valueW: CGFloat = 90
+        let rightX  = c.pageW - c.margin - valueW - labelW
+
+        func row(_ label: String, _ value: String, bold: Bool = false) {
+            let font  = bold ? c.fHdr : c.fVal
+            let clr   = bold ? c.clrDark : c.clrMid
+            c.put(label, font: c.fVal, color: c.clrMid,
+                  x: rightX, y: c.posY, w: labelW - 4, h: 14, align: .right)
+            c.put(value, font: font, color: clr,
+                  x: rightX + labelW, y: c.posY, w: valueW - 4, h: 14, align: .right)
+            c.posY += 16
+        }
+        row("Subtotal:", currStr(po.subtotal))
+        if po.taxAmount > 0 {
+            let pct = NSDecimalNumber(decimal: po.taxRate * 100).intValue
+            row("GST (\(pct)%):", currStr(po.taxAmount))
+        }
+        let divX = rightX + 20
+        UIColor(white: 0.80, alpha: 1).setStroke()
+        let path = UIBezierPath()
+        path.move(to:    CGPoint(x: divX, y: c.posY))
+        path.addLine(to: CGPoint(x: c.pageW - c.margin, y: c.posY))
+        path.lineWidth = 0.5
+        path.stroke()
+        c.posY += 4
+        row("TOTAL:", currStr(po.total), bold: true)
+        c.posY += 4
+    }
+
+    private func drawTextSection(_ title: String, text: String) {
+        guard !text.isEmpty else { return }
+        let h = c.textH(text, width: c.cW, font: c.fVal)
+        c.ensureSpace(16 + h + 14)
+        c.posY += 6
+        c.put(title, font: c.fSec, color: c.clrBlue,
+              x: c.margin, y: c.posY, w: c.cW, h: 13)
+        c.posY += 16
+        c.putWrap(text, font: c.fVal, color: c.clrDark,
+                  x: c.margin, y: c.posY, w: c.cW, h: h + 4)
+        c.posY += h + 10
+    }
+
+    private func drawFooter() {
+        let now = DateFormatter.localizedString(from: Date(), dateStyle: .medium, timeStyle: .short)
+        c.put("Generated: \(now)  ·  Aski IQ  ·  \(po.poNumber)",
+              font: c.fCap, color: c.clrMid,
+              x: c.margin, y: c.posY + 4, w: c.cW, h: 12)
+    }
+
+    private func decStr(_ d: Decimal) -> String {
+        let n = NSDecimalNumber(decimal: d)
+        if d == Decimal(Int(truncating: n)) { return "\(Int(truncating: n))" }
+        return n.stringValue
+    }
+
+    private func currStr(_ d: Decimal) -> String {
+        let f = NumberFormatter()
+        f.numberStyle = .currency; f.currencyCode = "CAD"
+        f.maximumFractionDigits = 2; f.minimumFractionDigits = 2
+        return f.string(from: NSDecimalNumber(decimal: d)) ?? "$\(d)"
+    }
+}
 #endif
