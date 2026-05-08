@@ -28,6 +28,7 @@ enum MaterialRequestStatus: String, Codable, CaseIterable {
     case draft      = "draft"
     case submitted  = "submitted"
     case approved   = "approved"
+    case rejected   = "rejected"   // approver declined; terminal
     case ordered    = "ordered"
     case partial    = "partial"
     case delivered  = "delivered"
@@ -38,6 +39,7 @@ enum MaterialRequestStatus: String, Codable, CaseIterable {
         case .draft:     return "Draft"
         case .submitted: return "Submitted"
         case .approved:  return "Approved"
+        case .rejected:  return "Rejected"
         case .ordered:   return "Ordered"
         case .partial:   return "Partial"
         case .delivered: return "Delivered"
@@ -46,6 +48,9 @@ enum MaterialRequestStatus: String, Codable, CaseIterable {
     }
 
     var isOpen: Bool {
+        // Rejected joins delivered/cancelled in the closed set — once an
+        // approver declines, the request is terminal. The requester
+        // creates a new MR if they want to try again with revisions.
         [.submitted, .approved, .ordered, .partial].contains(self)
     }
 }
@@ -456,6 +461,51 @@ extension AppStore {
         }
     }
 
+    /// Reject a submitted request. Terminal action — once rejected, the
+    /// requester creates a new MR if they want to re-pitch with changes.
+    /// `reason` is stored on `approvalNote` (re-using the field; the
+    /// audit row's status_changed event tells you it was a rejection).
+    /// Same role gate as approve so the same set of users can do either.
+    func rejectMaterialRequest(_ request: MaterialRequest, reason: String) {
+        guard requireRole([.projectManager, .officeAdmin, .manager, .executive],
+                          action: "reject_material_request") else { return }
+        guard let idx = materialRequests.firstIndex(where: { $0.id == request.id }) else { return }
+        var updated = request
+        updated.status         = .rejected
+        updated.approvedByID   = currentUser?.id   // who actioned, even though it's a rejection
+        updated.approvedByName = currentUser?.fullName ?? "Office"
+        updated.approvedAt     = Date()
+        updated.approvalNote   = reason
+        updated.updatedAt      = Date()
+        updated.syncStatus     = .pending
+        objectWillChange.send()
+        materialRequests[idx]  = updated
+        Task { await SyncEngine.shared.pushPendingMaterialRequests() }
+    }
+
+    /// Send a submitted request back to the requester for changes. NOT a
+    /// rejection — flips status .submitted → .draft so the requester can
+    /// edit and resubmit. The reviewer's notes are stored on
+    /// `approvalNote` so the requester sees what to change. The audit row
+    /// captures the status flip for accountability.
+    func requestChangesOnMaterialRequest(_ request: MaterialRequest, notes: String) {
+        guard requireRole([.projectManager, .officeAdmin, .manager, .executive],
+                          action: "request_changes_material_request") else { return }
+        guard let idx = materialRequests.firstIndex(where: { $0.id == request.id }) else { return }
+        var updated = request
+        updated.status         = .draft
+        updated.approvalNote   = notes   // visible to requester on edit
+        // Clear submission stamps so the audit row's old/new status flip
+        // (.submitted → .draft) reads cleanly. We DON'T clear approvedAt
+        // / approvedByID because there was no approval to revoke.
+        updated.submittedAt    = nil
+        updated.updatedAt      = Date()
+        updated.syncStatus     = .pending
+        objectWillChange.send()
+        materialRequests[idx]  = updated
+        Task { await SyncEngine.shared.pushPendingMaterialRequests() }
+    }
+
     /// Mark a request as ordered with a supplier. Called after the PO is
     /// dispatched. Stamps `orderedAt` so the audit log can compute
     /// approve→order latency.
@@ -598,6 +648,13 @@ extension AppStore {
 
     var deliveredMaterialRequests: [MaterialRequest] {
         materialRequests.filter { $0.status == .delivered && !$0.isDeleted }
+    }
+
+    /// Rejected requests for the Hub's Rejected pipeline section. Kept
+    /// separate from cancelled so rejected (managerial decline) can be
+    /// audited differently from cancelled (requester pulled it back).
+    var rejectedMaterialRequests: [MaterialRequest] {
+        materialRequests.filter { $0.status == .rejected && !$0.isDeleted }
     }
 
     // MARK: Duplicate detection

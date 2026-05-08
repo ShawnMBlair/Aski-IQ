@@ -174,6 +174,19 @@ struct ProcurementHubView: View {
                     color:   .green,
                     requests: store.deliveredMaterialRequests
                 )
+                // Rejected — terminal state. Only shown when there are
+                // rejected requests so the pipeline doesn't show a "0"
+                // bucket as a permanent reminder of failure.
+                if !store.rejectedMaterialRequests.isEmpty {
+                    Divider().padding(.leading, 60)
+                    pipelineRow(
+                        title:   "Rejected",
+                        detail:  "Approver declined; requester can resubmit a new MR",
+                        icon:    "hand.thumbsdown.fill",
+                        color:   .red,
+                        requests: store.rejectedMaterialRequests
+                    )
+                }
             }
             .background(Color(.secondarySystemBackground))
             .cornerRadius(12)
@@ -494,6 +507,7 @@ func mrStatusColor(_ s: MaterialRequestStatus) -> Color {
     case .draft:     return .secondary
     case .submitted: return .orange
     case .approved:  return .blue
+    case .rejected:  return .red
     case .ordered:   return .purple
     case .partial:   return .yellow
     case .delivered: return .green
@@ -514,6 +528,22 @@ struct MRDetailView: View {
     @State private var showReceiveSheet = false
     @State private var showDuplicateAlert = false
     @State private var duplicateMatches: [MaterialRequest] = []
+    @State private var rejectReasonSheetMode: RejectionMode? = nil
+    @State private var rejectReasonText: String = ""
+
+    /// Differentiates the two reason-capture flows on the same sheet —
+    /// outright rejection (terminal) vs. send-back-for-changes (returns
+    /// to draft). The sheet's title + button copy adapt accordingly.
+    enum RejectionMode: Identifiable {
+        case reject
+        case requestChanges
+        var id: String {
+            switch self {
+            case .reject:         return "reject"
+            case .requestChanges: return "requestChanges"
+            }
+        }
+    }
 
     init(request: MaterialRequest) {
         self.request = request
@@ -820,6 +850,18 @@ struct MRDetailView: View {
                             store.approveMaterialRequest(local)
                             refreshLocal()
                         }
+                        // Three-button approval surface per the procurement
+                        // plan: Approve / Reject / Request Changes. The two
+                        // negative actions both capture a reason via the same
+                        // sheet — differentiated by RejectionMode.
+                        actionButton("Request Changes", icon: "arrow.uturn.backward.circle.fill", color: .orange) {
+                            rejectReasonText = ""
+                            rejectReasonSheetMode = .requestChanges
+                        }
+                        actionButton("Reject Request", icon: "xmark.circle.fill", color: .red) {
+                            rejectReasonText = ""
+                            rejectReasonSheetMode = .reject
+                        }
                     }
                     // When the current user is in the .submitted queue but can't
                     // approve this amount, surface why so they don't think the
@@ -922,6 +964,9 @@ struct MRDetailView: View {
                 refreshLocal()
             }
         }
+        .sheet(item: $rejectReasonSheetMode, onDismiss: { refreshLocal() }) { mode in
+            rejectReasonSheet(mode: mode)
+        }
         .alert("Delete Request", isPresented: $showDeleteAlert) {
             Button("Delete", role: .destructive) { store.deleteMaterialRequest(id: local.id); dismiss() }
             Button("Cancel", role: .cancel) {}
@@ -1021,6 +1066,9 @@ struct MRDetailView: View {
         case "delivered": return "shippingbox.fill"
         case "cancelled": return "xmark.circle.fill"
         case "rejected":  return "hand.thumbsdown.fill"
+        // status_changed back to draft — no `newStatus == "draft"` rows
+        // in normal flow, but Request Changes produces exactly this.
+        case "draft":     return "arrow.uturn.backward.circle.fill"
         default:          return event.action == "created" ? "plus.circle.fill" : "circle.fill"
         }
     }
@@ -1031,7 +1079,59 @@ struct MRDetailView: View {
         case "submitted":             return .blue
         case "ordered", "partial":    return .purple
         case "cancelled", "rejected": return .red
+        case "draft":                 return .orange   // sent back for changes
         default:                       return .gray
+        }
+    }
+
+    /// Reason-capture sheet shared by Reject and Request Changes. Both
+    /// flows need a free-text justification visible in the audit log;
+    /// only the title / button copy / destination action differ.
+    @ViewBuilder
+    private func rejectReasonSheet(mode: RejectionMode) -> some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField(
+                        mode == .reject
+                            ? "Why is this being rejected?"
+                            : "What needs to change?",
+                        text: $rejectReasonText,
+                        axis: .vertical
+                    )
+                    .lineLimit(4...8)
+                } footer: {
+                    Text(mode == .reject
+                        ? "Stored on the request. Visible in the audit history."
+                        : "The requester will see this when they reopen the request to edit.")
+                        .font(.caption2)
+                }
+            }
+            .navigationTitle(mode == .reject ? "Reject Request" : "Request Changes")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { rejectReasonSheetMode = nil }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(mode == .reject ? "Reject" : "Send Back") {
+                        let trimmed = rejectReasonText.trimmingCharacters(in: .whitespaces)
+                        // Both paths require a non-empty reason — without one
+                        // the audit row is useless and the requester can't
+                        // act on it.
+                        guard !trimmed.isEmpty else { return }
+                        switch mode {
+                        case .reject:
+                            store.rejectMaterialRequest(local, reason: trimmed)
+                        case .requestChanges:
+                            store.requestChangesOnMaterialRequest(local, notes: trimmed)
+                        }
+                        rejectReasonSheetMode = nil
+                    }
+                    .bold()
+                    .disabled(rejectReasonText.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
         }
     }
 }
