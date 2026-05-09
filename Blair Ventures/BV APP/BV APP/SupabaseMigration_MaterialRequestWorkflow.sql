@@ -708,10 +708,13 @@ revoke execute on function public.recalculate_material_request_total(uuid)   fro
 -- EXECUTE to PUBLIC on CREATE FUNCTION; anon inherits from PUBLIC.
 -- Pattern: revoke from PUBLIC, grant explicitly to authenticated.
 revoke execute on function public.current_user_company_id()     from public;
+revoke execute on function public.current_user_company_id()     from anon;
 grant  execute on function public.current_user_company_id()     to authenticated;
 revoke execute on function public.current_user_role_key()       from public;
+revoke execute on function public.current_user_role_key()       from anon;
 grant  execute on function public.current_user_role_key()       to authenticated;
 revoke execute on function public.current_user_is_admin_or_pm() from public;
+revoke execute on function public.current_user_is_admin_or_pm() from anon;
 grant  execute on function public.current_user_is_admin_or_pm() to authenticated;
 
 -- =========================================================
