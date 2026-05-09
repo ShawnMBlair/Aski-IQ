@@ -1197,6 +1197,7 @@ extension SyncEngine {
                 let delivery_address, terms, notes: String?
                 let tax_rate: Double
                 let line_items_json: String?
+                let delivery_photo_url: String?
             }
             let rows: [Row] = try await supabase
                 .from(SupabaseTable.purchaseOrders)
@@ -1224,6 +1225,7 @@ extension SyncEngine {
                 po.notes           = row.notes ?? ""
                 po.taxRate         = fromDouble(row.tax_rate)
                 po.lineItems       = decodeJSON(row.line_items_json, as: [MaterialLineItem].self) ?? []
+                po.deliveryPhotoURL = row.delivery_photo_url
                 po.syncStatus      = .synced
                 merged.removeAll { $0.id == uuid }
                 merged.append(po)
@@ -1249,6 +1251,7 @@ extension SyncEngine {
                     let delivery_address, terms, notes: String?
                     let tax_rate: Double
                     let line_items_json: String?
+                    let delivery_photo_url: String?
                     let is_deleted: Bool
                     let deleted_at: String?
                     let deleted_by: String?
@@ -1269,6 +1272,7 @@ extension SyncEngine {
                     notes:            po.notes.isEmpty    ? nil : po.notes,
                     tax_rate:         toDouble(po.taxRate),
                     line_items_json:  jsonString(po.lineItems),
+                    delivery_photo_url: po.deliveryPhotoURL,
                     is_deleted:       po.isDeleted,
                     deleted_at:       po.deletedAt.map { isoFull.string(from: $0) },
                     deleted_by:       po.deletedBy

@@ -955,7 +955,7 @@ struct MRDetailView: View {
             POCreateEditView(po: newPOFromRequest())
         }
         .sheet(isPresented: $showReceiveSheet, onDismiss: refreshLocal) {
-            MRReceiveSheet(request: local) { quantities, photoPath in
+            ReceiveItemsSheet(entity: local) { quantities, photoPath in
                 store.receiveMaterialRequest(
                     local,
                     receivedQuantities: quantities,
@@ -1889,6 +1889,29 @@ struct MaterialLineItemEditSheet: View {
     }
 }
 
+// MARK: - Receivable abstraction
+// Lets the same receive sheet UI drive both MR and PO. Both entities
+// share MaterialLineItem so qty math + photo upload are identical;
+// only the wrapper differs (id / company / number for the title).
+
+protocol ReceivableEntity {
+    var id: UUID { get }
+    var companyID: UUID? { get }
+    var lineItems: [MaterialLineItem] { get }
+    var deliveryPhotoURL: String? { get }
+    /// Display number used in the sheet title — e.g. "MR-2026-0001" or
+    /// "PO-2026-0001".
+    var receivableDisplayNumber: String { get }
+}
+
+extension MaterialRequest: ReceivableEntity {
+    var receivableDisplayNumber: String { requestNumber }
+}
+
+extension PurchaseOrder: ReceivableEntity {
+    var receivableDisplayNumber: String { poNumber }
+}
+
 // MARK: - MR Receive Sheet
 
 /// Per-line-item receiving UI. Receiver enters how much actually showed up
@@ -1901,40 +1924,44 @@ struct MaterialLineItemEditSheet: View {
 ///   photo (packing slip / materials on site). Partial receives are
 ///   allowed without a photo so a receiver on a tarmac with bad cellular
 ///   isn't stuck with their qty entries unsaved.
-struct MRReceiveSheet: View {
+/// Renamed from MRReceiveSheet — same UI, now drives MR and PO via
+/// the ReceivableEntity protocol. Title says "Receive — MR-X" or
+/// "Receive — PO-X" depending on the wrapper.
+struct ReceiveItemsSheet: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) var dismiss
-    let request: MaterialRequest
+    let entity: any ReceivableEntity
     let onConfirm: ([UUID: Decimal], String?) -> Void
 
     @State private var quantities: [UUID: Decimal]
 
     // Photo state — selected by PhotosPicker, decoded into UIImage for the
     // thumbnail, uploaded on Confirm. existingPhotoPath holds the URL
-    // already saved on the MR from a prior partial receive — so a receiver
-    // who's added the photo earlier doesn't have to re-upload to finalize.
+    // already saved on the entity from a prior partial receive — so a
+    // receiver who's added the photo earlier doesn't have to re-upload
+    // to finalize.
     @State private var photoItem: PhotosPickerItem? = nil
     @State private var photoImage: UIImage? = nil
     @State private var existingPhotoPath: String?
     @State private var isUploading = false
 
-    init(request: MaterialRequest,
+    init(entity: any ReceivableEntity,
          onConfirm: @escaping ([UUID: Decimal], String?) -> Void) {
-        self.request = request
+        self.entity = entity
         self.onConfirm = onConfirm
         // Seed with prior received qty so the receiver only edits the delta.
         var seed: [UUID: Decimal] = [:]
-        for item in request.lineItems { seed[item.id] = item.quantityReceived }
+        for item in entity.lineItems { seed[item.id] = item.quantityReceived }
         _quantities = State(initialValue: seed)
-        _existingPhotoPath = State(initialValue: request.deliveryPhotoURL)
+        _existingPhotoPath = State(initialValue: entity.deliveryPhotoURL)
     }
 
     private var allFullyReceived: Bool {
-        request.lineItems.allSatisfy { (quantities[$0.id] ?? 0) >= $0.quantity }
+        entity.lineItems.allSatisfy { (quantities[$0.id] ?? 0) >= $0.quantity }
     }
 
     private var anyShort: Bool {
-        request.lineItems.contains { (quantities[$0.id] ?? 0) < $0.quantity }
+        entity.lineItems.contains { (quantities[$0.id] ?? 0) < $0.quantity }
     }
 
     private var hasPhoto: Bool {
@@ -1953,7 +1980,7 @@ struct MRReceiveSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    ForEach(request.lineItems) { item in
+                    ForEach(entity.lineItems) { item in
                         VStack(alignment: .leading, spacing: 6) {
                             Text(item.description).font(.subheadline).bold()
                             HStack {
@@ -2037,7 +2064,7 @@ struct MRReceiveSheet: View {
                     }
                 }
             }
-            .navigationTitle("Receive — \(request.requestNumber)")
+            .navigationTitle("Receive — \(entity.receivableDisplayNumber)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -2056,7 +2083,7 @@ struct MRReceiveSheet: View {
             .toolbar {
                 ToolbarItemGroup(placement: .keyboard) {
                     Button("Mark All Fully Received") {
-                        for item in request.lineItems {
+                        for item in entity.lineItems {
                             quantities[item.id] = item.quantity
                         }
                     }
@@ -2078,8 +2105,8 @@ struct MRReceiveSheet: View {
             do {
                 pathToSave = try await DeliveryPhotoService.shared.upload(
                     image:     newImage,
-                    requestID: request.id,
-                    companyID: request.companyID ?? store.currentCompanyID
+                    requestID: entity.id,
+                    companyID: entity.companyID ?? store.currentCompanyID
                 )
             } catch {
                 ToastService.shared.error(error.localizedDescription)
@@ -2329,6 +2356,7 @@ struct PODetailView: View {
     @State private var showEdit = false
     @State private var showDeleteAlert = false
     @State private var isSendingToSupplier = false
+    @State private var showReceiveSheet = false
 
     init(po: PurchaseOrder) {
         self.po = po
@@ -2454,14 +2482,13 @@ struct PODetailView: View {
                     if local.status == .sent {
                         poActionButton("Confirm Receipt Pending", icon: "checkmark.circle", color: .purple) { transitionPO(to: .confirmed) }
                     }
-                    if local.status == .confirmed || local.status == .partial {
-                        poActionButton("Mark as Received", icon: "shippingbox.fill", color: .green) {
-                            var updated = local
-                            updated.status       = .received
-                            updated.receivedDate = Date()
-                            updated.updatedAt    = Date()
-                            store.updatePurchaseOrder(updated)
-                            refreshLocal()
+                    // Receive flow now available for any post-send status —
+                    // .sent / .confirmed / .partial — so the receiver can
+                    // start logging deliveries as soon as supply ships,
+                    // not just after the supplier confirms acceptance.
+                    if [.sent, .confirmed, .partial].contains(local.status) {
+                        poActionButton("Receive Items", icon: "shippingbox.fill", color: .green) {
+                            showReceiveSheet = true
                         }
                     }
                     if store.currentUserRole == .projectManager || store.currentUserRole == .officeAdmin ||
@@ -2488,6 +2515,16 @@ struct PODetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showEdit, onDismiss: refreshLocal) {
             POCreateEditView(po: local)
+        }
+        .sheet(isPresented: $showReceiveSheet, onDismiss: refreshLocal) {
+            ReceiveItemsSheet(entity: local) { quantities, photoPath in
+                store.receivePurchaseOrder(
+                    local,
+                    receivedQuantities: quantities,
+                    deliveryPhotoURL:   photoPath
+                )
+                refreshLocal()
+            }
         }
         .alert("Delete PO", isPresented: $showDeleteAlert) {
             Button("Delete", role: .destructive) { store.deletePurchaseOrder(id: local.id); dismiss() }

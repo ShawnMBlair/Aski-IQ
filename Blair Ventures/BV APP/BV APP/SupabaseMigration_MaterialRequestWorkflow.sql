@@ -215,6 +215,15 @@ check (
 );
 
 -- =========================================================
+-- 4a. Purchase Orders — delivery proof photo
+-- =========================================================
+-- Mirrors material_requests.delivery_photo_url. Required by the PO
+-- receive flow (Procurement.receivePurchaseOrder + ReceiveItemsSheet)
+-- to gate final .received status the same way the MR side does.
+alter table public.purchase_orders
+add column if not exists delivery_photo_url text null;
+
+-- =========================================================
 -- 5. Material request items table
 -- Tracks requested and received quantities
 -- =========================================================

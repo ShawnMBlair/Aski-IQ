@@ -309,6 +309,12 @@ struct PurchaseOrder: Identifiable, Codable, Equatable {
     var notes:         String = ""
     var internalNotes: String = ""
 
+    // Delivery proof — Supabase Storage path inside the `contracts`
+    // bucket (re-uses the same path layout as MaterialRequest deliveries).
+    // Required for the final .received status; partial receives can save
+    // line-item progress without one. See receivePurchaseOrder above.
+    var deliveryPhotoURL: String? = nil
+
     // Tax
     var taxRate:       Decimal = 0.05
 
@@ -778,6 +784,78 @@ extension AppStore {
         objectWillChange.send()
         purchaseOrders[idx] = updated
         Task { await SyncEngine.shared.pushPendingPurchaseOrders() }
+    }
+
+    /// Receive a PO with per-line-item granularity. Mirrors the MR
+    /// receive flow: status rolls up to `.received` when all lines are
+    /// satisfied and a delivery photo is on file, `.partial` when some
+    /// line is short OR no photo on a fully-received attempt (the
+    /// quantities are still saved so the receiver doesn't lose work).
+    ///
+    /// PHOTO REQUIREMENT
+    ///   Final `.received` status is BLOCKED without `deliveryPhotoURL`
+    ///   (either freshly uploaded or already on the row). Partial
+    ///   receives proceed without one — same field-friendly behavior
+    ///   as the MR side.
+    ///
+    /// LINKED MR
+    ///   Doesn't auto-propagate to the linked Material Request — the
+    ///   MR's own receive flow is independent. Rationale: PO and MR
+    ///   line items can drift apart after edits, so blindly mirroring
+    ///   quantities risks corrupting the source-of-truth on either
+    ///   side. Operators receive against whichever record represents
+    ///   the canonical delivery (typically the PO).
+    ///
+    /// Returns true on success, false when blocked by validation.
+    @discardableResult
+    func receivePurchaseOrder(
+        _ po: PurchaseOrder,
+        receivedQuantities: [UUID: Decimal],
+        deliveryPhotoURL: String? = nil
+    ) -> Bool {
+        guard requireRole([.fieldWorker, .foreman, .projectManager, .officeAdmin, .manager, .executive],
+                          action: "receive_purchase_order") else { return false }
+        guard let idx = purchaseOrders.firstIndex(where: { $0.id == po.id }) else { return false }
+        var updated = po
+        updated.lineItems = updated.lineItems.map { item in
+            var copy = item
+            if let qty = receivedQuantities[item.id] {
+                copy.quantityReceived = qty
+            }
+            return copy
+        }
+        let allReceived = !updated.lineItems.isEmpty
+            && updated.lineItems.allSatisfy { $0.isFullyReceived }
+        let anyReceived = updated.lineItems.contains { $0.quantityReceived > 0 }
+
+        if let url = deliveryPhotoURL {
+            updated.deliveryPhotoURL = url
+        }
+
+        if allReceived {
+            // Photo gate — same as MR side. Receivers can save partial
+            // progress without it but cannot finalize without proof.
+            guard updated.deliveryPhotoURL?.isEmpty == false else {
+                ToastService.shared.error("Add a photo of the delivery before marking as Received.")
+                updated.status     = anyReceived ? .partial : updated.status
+                updated.updatedAt  = Date()
+                updated.syncStatus = .pending
+                objectWillChange.send()
+                purchaseOrders[idx] = updated
+                Task { await SyncEngine.shared.pushPendingPurchaseOrders() }
+                return false
+            }
+            updated.status       = .received
+            updated.receivedDate = Date()
+        } else if anyReceived {
+            updated.status = .partial
+        }
+        updated.updatedAt  = Date()
+        updated.syncStatus = .pending
+        objectWillChange.send()
+        purchaseOrders[idx] = updated
+        Task { await SyncEngine.shared.pushPendingPurchaseOrders() }
+        return true
     }
 
     /// Mark a PO as sent to the supplier. Called after the email dispatch
