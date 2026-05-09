@@ -750,3 +750,256 @@ drop index if exists public.purchase_orders_company_po_number_unique;
 create unique index purchase_orders_company_po_number_unique
     on public.purchase_orders (company_id, po_number)
     where is_deleted = false;
+
+-- =========================================================
+-- 19. Auto-link opportunity — fallback for material_requests / purchase_orders
+-- =========================================================
+-- The auto_link_opportunity_for_commercial_record() trigger originally
+-- only resolved opportunity_id from the linked project's opportunity_id.
+-- When project_id was null OR the project had no opportunity_id, the
+-- trigger gave up; the row insert then failed the NOT NULL on
+-- opportunity_id. This blocked field-side procurement on devices whose
+-- local store hadn't yet pulled the relevant project / opportunity.
+--
+-- Other commercial branches (estimates / quotes / invoices / material_sales /
+-- contracts) already set v_client_id and feed an existing find/create-opp
+-- fallback at the bottom of the function. The MR/PO branch did not.
+-- This section replaces the function with three additive changes:
+--
+--   (1) MR branch: when the project's opportunity_id is null, derive
+--       v_client_id from project.client_name → clients table → falls
+--       through to the existing find/create-opp logic.
+--   (2) PO branch: same as (1).
+--   (3) NEW terminal fallback for MR/PO only: when v_client_id couldn't
+--       be resolved (e.g. orphan internal MR), reuse any open
+--       opportunity in the same company. Does NOT auto-create a
+--       clientless synthetic opp because crm_opportunities.client_id
+--       is NOT NULL — guessing a client would corrupt entity-first
+--       semantics. If no open opp exists, the row insert still fails
+--       NOT NULL on opportunity_id (correct behavior — operator must
+--       create an opportunity first).
+--
+-- All other branches (estimates / quotes / material_sales / projects /
+-- change_orders / invoices / contracts) preserved verbatim.
+--
+-- Implementation note: split the original IN ('purchase_orders',
+-- 'material_requests') branch into two ELSIF arms because plpgsql
+-- resolves NEW.<column> references at compile time per trigger context,
+-- and the two tables have different "title" columns (request_number vs
+-- po_number). A CASE WHEN over both fails compile-time validation.
+
+CREATE OR REPLACE FUNCTION public.auto_link_opportunity_for_commercial_record()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_opp_id              uuid;
+  v_client_id           uuid;
+  v_company_id          uuid;
+  v_title               text;
+  v_source              text;
+  v_action              text;
+  v_project_client_name text;
+BEGIN
+  IF NEW.opportunity_id IS NOT NULL THEN
+    RETURN NEW;
+  END IF;
+
+  IF TG_TABLE_NAME = 'estimates' THEN
+    v_client_id  := NEW.client_id;
+    v_company_id := NEW.company_id;
+    v_title      := COALESCE(NEW.name, NEW.job_number, 'Estimate');
+
+  ELSIF TG_TABLE_NAME = 'quotes' THEN
+    v_client_id  := NEW.client_id;
+    v_company_id := NEW.company_id;
+    v_title      := COALESCE(NEW.client_name, NEW.job_number, 'Quote');
+    IF NEW.estimate_id IS NOT NULL THEN
+      SELECT opportunity_id INTO v_opp_id FROM public.estimates
+      WHERE id = NEW.estimate_id AND opportunity_id IS NOT NULL;
+      IF v_opp_id IS NOT NULL THEN v_source := 'parent_estimate.opportunity_id'; END IF;
+    END IF;
+
+  ELSIF TG_TABLE_NAME = 'material_sales' THEN
+    v_client_id  := NEW.client_id;
+    v_company_id := NEW.company_id;
+    v_title      := COALESCE(NEW.sale_number, 'Material Sale');
+    IF NEW.quote_id IS NOT NULL THEN
+      SELECT opportunity_id INTO v_opp_id FROM public.quotes
+      WHERE id = NEW.quote_id AND opportunity_id IS NOT NULL;
+      IF v_opp_id IS NOT NULL THEN v_source := 'parent_quote.opportunity_id'; END IF;
+    END IF;
+
+  ELSIF TG_TABLE_NAME = 'projects' THEN
+    v_company_id := NEW.company_id;
+    v_title      := COALESCE(NEW.name, 'Project');
+    IF NEW.client_name IS NOT NULL AND v_company_id IS NOT NULL THEN
+      SELECT id INTO v_client_id
+      FROM public.clients
+      WHERE company_id = v_company_id
+        AND lower(name) = lower(btrim(NEW.client_name))
+        AND NOT is_deleted
+      ORDER BY updated_at DESC NULLS LAST
+      LIMIT 1;
+    END IF;
+
+  ELSIF TG_TABLE_NAME = 'change_orders' THEN
+    v_company_id := NEW.company_id;
+    IF NEW.project_id IS NOT NULL THEN
+      SELECT opportunity_id INTO v_opp_id FROM public.projects
+      WHERE id = NEW.project_id AND opportunity_id IS NOT NULL;
+      IF v_opp_id IS NOT NULL THEN v_source := 'parent_project.opportunity_id'; END IF;
+    END IF;
+    IF v_opp_id IS NULL AND NEW.contract_id IS NOT NULL THEN
+      SELECT opportunity_id INTO v_opp_id FROM public.contracts
+      WHERE id = NEW.contract_id AND opportunity_id IS NOT NULL;
+      IF v_opp_id IS NOT NULL THEN v_source := 'parent_contract.opportunity_id'; END IF;
+    END IF;
+
+  ELSIF TG_TABLE_NAME = 'invoices' THEN
+    v_client_id  := NEW.client_id;
+    v_company_id := NEW.company_id;
+    v_title      := COALESCE(NEW.invoice_number, 'Invoice');
+    IF NEW.quote_id IS NOT NULL THEN
+      SELECT opportunity_id INTO v_opp_id FROM public.quotes
+      WHERE id = NEW.quote_id AND opportunity_id IS NOT NULL;
+      IF v_opp_id IS NOT NULL THEN v_source := 'parent_quote.opportunity_id'; END IF;
+    END IF;
+    IF v_opp_id IS NULL AND NEW.project_id IS NOT NULL THEN
+      SELECT opportunity_id INTO v_opp_id FROM public.projects
+      WHERE id = NEW.project_id AND opportunity_id IS NOT NULL;
+      IF v_opp_id IS NOT NULL THEN v_source := 'parent_project.opportunity_id'; END IF;
+    END IF;
+    IF v_opp_id IS NULL AND NEW.contract_id IS NOT NULL THEN
+      SELECT opportunity_id INTO v_opp_id FROM public.contracts
+      WHERE id = NEW.contract_id AND opportunity_id IS NOT NULL;
+      IF v_opp_id IS NOT NULL THEN v_source := 'parent_contract.opportunity_id'; END IF;
+    END IF;
+
+  ELSIF TG_TABLE_NAME = 'material_requests' THEN
+    v_company_id := NEW.company_id;
+    v_title      := COALESCE(NEW.request_number, 'Material Request');
+    IF NEW.project_id IS NOT NULL THEN
+      SELECT opportunity_id INTO v_opp_id
+      FROM public.projects
+      WHERE id = NEW.project_id AND opportunity_id IS NOT NULL;
+      IF v_opp_id IS NOT NULL THEN
+        v_source := 'parent_project.opportunity_id';
+      ELSE
+        SELECT client_name INTO v_project_client_name
+        FROM public.projects
+        WHERE id = NEW.project_id;
+        IF v_project_client_name IS NOT NULL AND v_company_id IS NOT NULL THEN
+          SELECT id INTO v_client_id
+          FROM public.clients
+          WHERE company_id = v_company_id
+            AND lower(name) = lower(btrim(v_project_client_name))
+            AND NOT is_deleted
+          ORDER BY updated_at DESC NULLS LAST
+          LIMIT 1;
+        END IF;
+      END IF;
+    END IF;
+
+  ELSIF TG_TABLE_NAME = 'purchase_orders' THEN
+    v_company_id := NEW.company_id;
+    v_title      := COALESCE(NEW.po_number, 'Purchase Order');
+    IF NEW.project_id IS NOT NULL THEN
+      SELECT opportunity_id INTO v_opp_id
+      FROM public.projects
+      WHERE id = NEW.project_id AND opportunity_id IS NOT NULL;
+      IF v_opp_id IS NOT NULL THEN
+        v_source := 'parent_project.opportunity_id';
+      ELSE
+        SELECT client_name INTO v_project_client_name
+        FROM public.projects
+        WHERE id = NEW.project_id;
+        IF v_project_client_name IS NOT NULL AND v_company_id IS NOT NULL THEN
+          SELECT id INTO v_client_id
+          FROM public.clients
+          WHERE company_id = v_company_id
+            AND lower(name) = lower(btrim(v_project_client_name))
+            AND NOT is_deleted
+          ORDER BY updated_at DESC NULLS LAST
+          LIMIT 1;
+        END IF;
+      END IF;
+    END IF;
+
+  ELSIF TG_TABLE_NAME = 'contracts' THEN
+    v_company_id := NEW.company_id;
+    v_title      := COALESCE(NEW.title, NEW.contract_number, 'Contract');
+    IF NEW.quote_id IS NOT NULL THEN
+      SELECT opportunity_id INTO v_opp_id FROM public.quotes
+      WHERE id = NEW.quote_id AND opportunity_id IS NOT NULL;
+      IF v_opp_id IS NOT NULL THEN v_source := 'parent_quote.opportunity_id'; END IF;
+    END IF;
+    IF v_opp_id IS NULL AND NEW.project_id IS NOT NULL THEN
+      SELECT opportunity_id INTO v_opp_id FROM public.projects
+      WHERE id = NEW.project_id AND opportunity_id IS NOT NULL;
+      IF v_opp_id IS NOT NULL THEN v_source := 'parent_project.opportunity_id'; END IF;
+    END IF;
+  END IF;
+
+  -- Find an open opp by client (existing).
+  IF v_opp_id IS NULL AND v_client_id IS NOT NULL AND v_company_id IS NOT NULL THEN
+    SELECT id INTO v_opp_id
+    FROM public.crm_opportunities
+    WHERE client_id = v_client_id
+      AND company_id = v_company_id
+      AND NOT is_deleted
+      AND stage NOT IN ('Won', 'Lost')
+    ORDER BY updated_at DESC NULLS LAST
+    LIMIT 1;
+    IF v_opp_id IS NOT NULL THEN v_source := 'open_opp_for_client'; END IF;
+  END IF;
+
+  -- Create a synthetic opp for the client (existing).
+  IF v_opp_id IS NULL AND v_client_id IS NOT NULL AND v_company_id IS NOT NULL THEN
+    INSERT INTO public.crm_opportunities (
+      company_id, client_id, title, stage, source, probability, notes
+    ) VALUES (
+      v_company_id, v_client_id, v_title, 'New Lead', 'auto_link_trigger', 50,
+      'Auto-created when ' || TG_TABLE_NAME || ' record was inserted without an opportunity link.'
+    )
+    RETURNING id INTO v_opp_id;
+    v_source := 'no_existing_open_opp';
+  END IF;
+
+  -- (NEW) MR/PO terminal fallback — when client couldn't be resolved
+  -- (orphan or unmatched project), reuse any open opp in the company.
+  -- See header comment for rationale on why we don't auto-create a
+  -- clientless synthetic opp here.
+  IF v_opp_id IS NULL
+     AND TG_TABLE_NAME IN ('purchase_orders','material_requests')
+     AND v_company_id IS NOT NULL THEN
+    SELECT id INTO v_opp_id
+    FROM public.crm_opportunities
+    WHERE company_id = v_company_id
+      AND NOT is_deleted
+      AND stage NOT IN ('Won', 'Lost')
+    ORDER BY updated_at DESC NULLS LAST
+    LIMIT 1;
+    IF v_opp_id IS NOT NULL THEN
+      v_source := 'open_opp_in_company_clientless_fallback';
+    END IF;
+  END IF;
+
+  IF v_opp_id IS NOT NULL THEN
+    NEW.opportunity_id := v_opp_id;
+    v_action := CASE
+      WHEN v_source = 'no_existing_open_opp' THEN 'created_synthetic_opportunity'
+      ELSE 'linked_via_trigger'
+    END;
+    INSERT INTO public.backfill_log (
+      run_label, table_name, row_id, action, source_path, opportunity_id, details
+    ) VALUES (
+      'auto_link_trigger', TG_TABLE_NAME, NEW.id, v_action, v_source, v_opp_id,
+      jsonb_build_object('client_id', v_client_id, 'company_id', v_company_id)
+    );
+  END IF;
+
+  RETURN NEW;
+END $function$;
