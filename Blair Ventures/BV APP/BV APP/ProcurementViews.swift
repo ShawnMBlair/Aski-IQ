@@ -586,11 +586,13 @@ func mrStatusColor(_ s: MaterialRequestStatus) -> Color {
     switch s {
     case .draft:     return .secondary
     case .submitted: return .orange
+    case .pending:   return .orange   // DB-only future state; visually mirrors .submitted
     case .approved:  return .blue
     case .rejected:  return .red
     case .ordered:   return .purple
     case .partial:   return .yellow
     case .delivered: return .green
+    case .closed:    return .gray     // DB-only future terminal state
     case .cancelled: return .gray
     }
 }
@@ -694,11 +696,20 @@ struct MRDetailView: View {
                             Text(local.requestedByName).font(.caption).bold()
                             // Email subtitle when on file — tappable so the
                             // PM can ping the requester directly without
-                            // copy-pasting into Mail.
-                            if let email = local.requestedByEmail, !email.isEmpty {
-                                Link(email, destination: URL(string: "mailto:\(email)") ?? URL(string: "https://example.com")!)
-                                    .font(.caption2)
-                                    .foregroundColor(.blue)
+                            // copy-pasting into Mail. If the address fails
+                            // mailto URL parsing, render plain text instead
+                            // of falling back to a sentinel URL.
+                            if let email = local.requestedByEmail,
+                               !email.isEmpty {
+                                if let mailtoURL = URL(string: "mailto:\(email)") {
+                                    Link(email, destination: mailtoURL)
+                                        .font(.caption2)
+                                        .foregroundColor(.blue)
+                                } else {
+                                    Text(email)
+                                        .font(.caption2)
+                                        .foregroundColor(.secondary)
+                                }
                             }
                         }
                         VStack(alignment: .leading, spacing: 2) {

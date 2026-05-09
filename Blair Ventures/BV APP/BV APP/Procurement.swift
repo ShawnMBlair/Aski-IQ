@@ -27,31 +27,53 @@ enum MaterialRequestDestinationType: String, Codable, CaseIterable {
 enum MaterialRequestStatus: String, Codable, CaseIterable {
     case draft      = "draft"
     case submitted  = "submitted"
+    case pending    = "pending"     // DB-only future routing — Swift never emits
     case approved   = "approved"
     case rejected   = "rejected"   // approver declined; terminal
     case ordered    = "ordered"
     case partial    = "partial"
     case delivered  = "delivered"
+    case closed     = "closed"      // DB-only future close-out — Swift never emits
     case cancelled  = "cancelled"
 
     var displayName: String {
         switch self {
         case .draft:     return "Draft"
         case .submitted: return "Submitted"
+        case .pending:   return "Pending"
         case .approved:  return "Approved"
         case .rejected:  return "Rejected"
         case .ordered:   return "Ordered"
         case .partial:   return "Partial"
         case .delivered: return "Delivered"
+        case .closed:    return "Closed"
         case .cancelled: return "Cancelled"
         }
     }
 
     var isOpen: Bool {
-        // Rejected joins delivered/cancelled in the closed set — once an
-        // approver declines, the request is terminal. The requester
+        // Rejected joins delivered/closed/cancelled in the closed set —
+        // once an approver declines, the request is terminal. The requester
         // creates a new MR if they want to try again with revisions.
-        [.submitted, .approved, .ordered, .partial].contains(self)
+        // .pending is treated as open (transient routing state).
+        [.submitted, .pending, .approved, .ordered, .partial].contains(self)
+    }
+
+    /// Defensive Decodable: the DB enum carries values the Swift app
+    /// doesn't emit but might receive on pull (future-routing flows
+    /// added in the migration's section 1). Map an unknown rawValue
+    /// to .draft so a single unexpected row never fails the whole
+    /// pull cycle. Logged so analytics can spot drift between Swift
+    /// and the DB enum.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+        if let known = MaterialRequestStatus(rawValue: raw) {
+            self = known
+        } else {
+            print("⚠️ MaterialRequestStatus: unknown raw value '\(raw)' — defaulting to .draft")
+            self = .draft
+        }
     }
 }
 
@@ -855,11 +877,31 @@ extension AppStore {
         }
     }
 
+    /// Generate the next MR number. Parses the highest sequence already in
+    /// use within the current (company, year) namespace and increments,
+    /// rather than using `materialRequests.count + 1`. Three reasons:
+    ///   1. count includes soft-deleted rows, so deleting then creating a
+    ///      new MR could re-issue the deleted row's number.
+    ///   2. count doesn't reset across years — BV-MR-2026-0500 was once
+    ///      followed by BV-MR-2027-0501, not BV-MR-2027-0001.
+    ///   3. count counts other companies' rows when multiple companies
+    ///      share a local store cache.
+    /// Cross-device race remains possible (two offline devices both
+    /// at max=10 will both emit -0011); the migration's UNIQUE
+    /// constraint on (company_id, request_number) catches that at the
+    /// DB layer. Sync engine retries with the next number.
     func nextMaterialRequestNumber() -> String {
         let prefix = AppSettings.shared.companyPrefix.isEmpty ? "BV" : AppSettings.shared.companyPrefix
         let year   = Calendar.current.component(.year, from: Date())
-        let next   = materialRequests.count + 1
-        return "\(prefix)-MR-\(year)-\(String(format: "%04d", next))"
+        let yearPrefix = "\(prefix)-MR-\(year)-"
+        let highest = materialRequests
+            .filter { $0.companyID == currentCompanyID && !$0.isDeleted }
+            .compactMap { mr -> Int? in
+                guard mr.requestNumber.hasPrefix(yearPrefix) else { return nil }
+                return Int(mr.requestNumber.dropFirst(yearPrefix.count))
+            }
+            .max() ?? 0
+        return "\(yearPrefix)\(String(format: "%04d", highest + 1))"
     }
 
     // MARK: Purchase Order CRUD
@@ -989,7 +1031,9 @@ extension AppStore {
         guard let mrID = po.materialRequestID,
               let mrIdx = materialRequests.firstIndex(where: { $0.id == mrID }) else { return }
         var mr = materialRequests[mrIdx]
-        guard mr.status.isOpen || mr.status == .ordered || mr.status == .partial else { return }
+        // .ordered and .partial are already in isOpen; the prior check
+        // OR'd them in redundantly. Trust the enum's own predicate.
+        guard mr.status.isOpen else { return }
         _applyLinkedReceiveState(
             sourceLineItems:  po.lineItems,
             sourcePhotoURL:   po.deliveryPhotoURL,
@@ -1243,11 +1287,21 @@ extension AppStore {
         return po
     }
 
+    /// Generate the next PO number. Same pattern as nextMaterialRequestNumber:
+    /// max-of-existing-in-(company, year) + 1, not a raw count. See that
+    /// method's doc comment for the rationale.
     func nextPONumber() -> String {
         let prefix = AppSettings.shared.companyPrefix.isEmpty ? "BV" : AppSettings.shared.companyPrefix
         let year   = Calendar.current.component(.year, from: Date())
-        let next   = purchaseOrders.count + 1
-        return "\(prefix)-PO-\(year)-\(String(format: "%04d", next))"
+        let yearPrefix = "\(prefix)-PO-\(year)-"
+        let highest = purchaseOrders
+            .filter { $0.companyID == currentCompanyID && !$0.isDeleted }
+            .compactMap { po -> Int? in
+                guard po.poNumber.hasPrefix(yearPrefix) else { return nil }
+                return Int(po.poNumber.dropFirst(yearPrefix.count))
+            }
+            .max() ?? 0
+        return "\(yearPrefix)\(String(format: "%04d", highest + 1))"
     }
 
     // MARK: Supplier CRUD

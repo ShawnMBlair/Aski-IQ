@@ -141,6 +141,13 @@ extension AppStore {
         guard requireRole([.manager, .executive, .owner],
                           action: "upsert_workflow_setting") else { return }
         var updated = setting
+        // Defense-in-depth: clamp negative limits to zero so an admin
+        // cannot accidentally invert a tier (a $-1k limit silently
+        // denies every approval). Validation belongs on the form too;
+        // this catches the case where the form is bypassed.
+        if updated.approvalLimitAmount < 0 {
+            updated.approvalLimitAmount = 0
+        }
         updated.updatedAt = Date()
         if let i = workflowSettings.firstIndex(where: { $0.id == setting.id }) {
             workflowSettings[i] = updated
