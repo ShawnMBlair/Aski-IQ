@@ -20,9 +20,18 @@
 //   one on the MR row today.
 //
 // COMPRESSION
-//   JPEG quality 0.7 — visually fine for proof-of-delivery, ~80% smaller
-//   than HEIC originals from the Photos library. Receivers' phones are
-//   often on cellular when uploading from job sites.
+//   Routes through SharedComponents.compressPhoto, which (a) downsizes
+//   to 2048 px on the longest edge and (b) iterates JPEG quality down
+//   from 0.8 until the encoded payload fits ~500 KB. Same helper used
+//   by DJR / Forms / Incidents — receivers on cellular at job sites
+//   get tolerable upload sizes regardless of the source camera's
+//   megapixel count.
+//
+// EXIF
+//   The UIImage → jpegData round-trip strips EXIF metadata (GPS
+//   coordinates, device serial, capture timestamps) — iOS does not
+//   preserve EXIF when re-encoding via UIImage. Project site
+//   coordinates therefore never reach Supabase Storage.
 
 #if canImport(UIKit)
 import Foundation
@@ -49,18 +58,24 @@ final class DeliveryPhotoService {
         }
     }
 
-    /// Uploads `image` as a JPEG (quality 0.7) to Supabase Storage and
-    /// returns the storage path. Caller stamps the path on
-    /// MaterialRequest.deliveryPhotoURL and pushes through SyncEngine.
+    /// Uploads `image` to Supabase Storage and returns the storage path.
+    /// The upload is routed through SharedComponents.compressPhoto which
+    /// caps the longest edge at 2048 px and iterates JPEG quality down
+    /// to keep the payload near 500 KB — see file header.
+    /// Caller stamps the path on MaterialRequest.deliveryPhotoURL and
+    /// pushes through SyncEngine.
     func upload(image: UIImage,
                 requestID: UUID,
                 companyID: UUID?) async throws -> String {
         guard let companyID = companyID else {
             throw DeliveryPhotoError.missingCompany
         }
-        guard let data = image.jpegData(compressionQuality: 0.7) else {
+        // Encode at high quality first so compressPhoto has full fidelity
+        // to step down from. The helper takes Data and returns Data.
+        guard let raw = image.jpegData(compressionQuality: 0.95) else {
             throw DeliveryPhotoError.encodeFailed
         }
+        let data = compressPhoto(raw)
         let filename = "delivery_\(UUID().uuidString).jpg"
         let path = "\(companyID.uuidString)/material-requests/\(requestID.uuidString)/\(filename)"
         do {
