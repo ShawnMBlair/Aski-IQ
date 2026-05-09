@@ -608,6 +608,8 @@ struct MRDetailView: View {
     @State private var showReceiveSheet = false
     @State private var showDuplicateAlert = false
     @State private var duplicateMatches: [MaterialRequest] = []
+    @State private var showBudgetAlert = false
+    @State private var budgetAlertMessage = ""
     @State private var rejectReasonSheetMode: RejectionMode? = nil
     @State private var rejectReasonText: String = ""
 
@@ -1051,6 +1053,10 @@ struct MRDetailView: View {
             Button("Delete", role: .destructive) { store.deleteMaterialRequest(id: local.id); dismiss() }
             Button("Cancel", role: .cancel) {}
         } message: { Text("This cannot be undone.") }
+        .alert("Over budget", isPresented: $showBudgetAlert) {
+            Button("Submit Anyway") { submitDespiteBudget() }
+            Button("Cancel", role: .cancel) {}
+        } message: { Text(budgetAlertMessage) }
         .alert(
             "Possible duplicate request",
             isPresented: $showDuplicateAlert,
@@ -1092,13 +1098,57 @@ struct MRDetailView: View {
         refreshLocal()
     }
 
-    /// Submit-for-approval entry point. Runs a duplicate-request check
-    /// against open requests on the same destination first; if matches are
-    /// found, raises a confirmation alert so the submitter can decide
-    /// whether to proceed (warn-don't-block per the spec — duplicate
-    /// requests are sometimes legitimate, e.g. follow-up after a partial
-    /// delivery short).
+    /// Submit-for-approval entry point. Runs two soft-warn checks in
+    /// order — budget impact first (most cost-relevant), then duplicate
+    /// detection — and only submits when both pass or the user confirms.
+    /// Both warnings are warn-don't-block per spec.
     private func attemptSubmit() {
+        if let warning = budgetWarningIfOverLimit() {
+            budgetAlertMessage = warning
+            showBudgetAlert = true
+            return
+        }
+        let matches = store.similarOpenRequests(to: local)
+        if matches.isEmpty {
+            store.submitMaterialRequest(local)
+            refreshLocal()
+        } else {
+            duplicateMatches = matches
+            showDuplicateAlert = true
+        }
+    }
+
+    /// Compose a budget-impact warning string when this MR would push
+    /// the project over its approved material budget. Returns nil when
+    /// no budget exists, the destination isn't a project, or the
+    /// numbers fit.
+    private func budgetWarningIfOverLimit() -> String? {
+        guard local.destinationType == .project,
+              let projectID = local.projectID else { return nil }
+        guard let available = store.availableMaterialBudget(for: projectID) else {
+            return nil   // no budget on file → no warning
+        }
+        // Current MR's total is already in the .approved/.submitted
+        // committed pool when editing an existing record, so subtract
+        // it back before comparing to avoid double-counting.
+        let alreadyInPool = local.status == .draft ? Decimal(0) : local.estimatedTotal
+        let effectiveAvailable = available + alreadyInPool
+        let overage = local.estimatedTotal - effectiveAvailable
+        guard overage > 0 else { return nil }
+        return """
+        This request would push the project's material budget \
+        \(overage.currencyString) over (request total \
+        \(local.estimatedTotal.currencyString) vs. \
+        \(effectiveAvailable.currencyString) available).
+
+        Submit anyway, or cancel to revise the line items.
+        """
+    }
+
+    /// Continuation after the budget alert — user confirmed they want
+    /// to submit despite being over budget. Falls through to the dup
+    /// check so we don't lose that signal.
+    private func submitDespiteBudget() {
         let matches = store.similarOpenRequests(to: local)
         if matches.isEmpty {
             store.submitMaterialRequest(local)
@@ -1315,6 +1365,7 @@ struct MRCreateEditView: View {
                 if !validationIssues.isEmpty { validationBanner }
                 mrDetailsSection
                 mrLineItemsSection
+                budgetImpactSection
                 receiptScanSection
                 Section("Notes") {
                     TextField("Additional details or instructions", text: $notes, axis: .vertical).lineLimit(3)
@@ -1784,6 +1835,46 @@ struct MRCreateEditView: View {
             HStack(spacing: 4) {
                 Text("Request Details")
                 Text("* required").font(.caption2).foregroundColor(.secondary)
+            }
+        }
+    }
+
+    /// Inline budget hint — shows remaining material budget on the
+    /// selected project so the requester sees the cost impact before
+    /// tapping Submit. No-ops when not on a project destination, when
+    /// the project has no budget on file, or when there's no project
+    /// selected yet.
+    @ViewBuilder
+    private var budgetImpactSection: some View {
+        if destinationType == .project,
+           let projectID = selectedProjectID,
+           let available = store.availableMaterialBudget(for: projectID) {
+            let lineItemTotal = lineItems.reduce(Decimal(0)) { $0 + $1.totalCost }
+            let projected = available - lineItemTotal
+            Section {
+                HStack {
+                    Text("Budget remaining")
+                    Spacer()
+                    Text(available.currencyString)
+                        .foregroundColor(available > 0 ? .secondary : .red)
+                }
+                if lineItemTotal > 0 {
+                    HStack {
+                        Text("After this request")
+                        Spacer()
+                        Text(projected.currencyString)
+                            .foregroundColor(projected >= 0 ? .green : .red)
+                            .bold()
+                    }
+                }
+            } header: {
+                Text("Project Budget")
+            } footer: {
+                if projected < 0 {
+                    Label("Over budget by \((-projected).currencyString) — Submit will warn but not block.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption2).foregroundColor(.orange)
+                }
             }
         }
     }

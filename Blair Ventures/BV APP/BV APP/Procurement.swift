@@ -769,6 +769,70 @@ extension AppStore {
         .sorted { $0.requestDate > $1.requestDate }
     }
 
+    // MARK: Budget check (Phase 2 partial — soft warning, no hard gate)
+    //
+    // Computes how much of a project's approved material budget is
+    // already committed across procurement records, and how much
+    // remains. Drives the soft-warn alert on MR submission so a
+    // requester sees "this would push the project $5k over budget" but
+    // can still proceed (warn-don't-block — same philosophy as the
+    // duplicate-request warning).
+    //
+    // RULES
+    //   • Budget source: ProjectBudget.totalBudgeted for the project
+    //     (lines + contingency). Returns nil when no budget exists.
+    //   • Committed: sum of estimatedTotal across non-cancelled,
+    //     non-rejected MRs on the project, plus standalone PO totals
+    //     (POs without a linked MR — those that ARE linked already
+    //     count via their parent MR's estimatedTotal).
+    //   • Excludes: cancelled / rejected MRs, deleted records.
+    //
+    // INTENTIONAL LIMITATIONS
+    //   • Cost-code-level budgets aren't checked — just the rolled-up
+    //     total. A request for $10k of "Concrete" against a project
+    //     with $50k budget passes even if the concrete cost-code line
+    //     was only budgeted at $5k.
+    //   • Doesn't account for change-order budget adjustments yet —
+    //     follow-up once the CO module exposes a budget delta.
+
+    /// Sum of all in-flight material commitments against a project.
+    /// Used by availableMaterialBudget below; surfaces directly on the
+    /// form when an operator wants to know how much has been committed.
+    func committedMaterialAmount(for projectID: UUID) -> Decimal {
+        let mrTotal = materialRequests
+            .filter { mr in
+                mr.projectID == projectID
+                    && !mr.isDeleted
+                    && mr.status != .cancelled
+                    && mr.status != .rejected
+            }
+            .reduce(Decimal(0)) { $0 + $1.estimatedTotal }
+
+        // Standalone POs only — POs auto-created from MRs would
+        // double-count if included since their parent MR's estimatedTotal
+        // already covers the same line items.
+        let poTotal = purchaseOrders
+            .filter { po in
+                po.projectID == projectID
+                    && po.materialRequestID == nil
+                    && !po.isDeleted
+                    && po.status != .cancelled
+            }
+            .reduce(Decimal(0)) { $0 + $1.total }
+
+        return mrTotal + poTotal
+    }
+
+    /// Remaining material budget for a project. Returns nil when the
+    /// project has no ProjectBudget on file (treat as "no budget set —
+    /// no warning"). Negative when committed exceeds budget.
+    func availableMaterialBudget(for projectID: UUID) -> Decimal? {
+        guard let budget = projectBudgets.first(where: {
+            $0.projectID == projectID && !$0.isDeleted
+        }) else { return nil }
+        return budget.totalBudgeted - committedMaterialAmount(for: projectID)
+    }
+
     /// Requests requiring the *current user's* attention. Drives the badge
     /// on the dashboard's "My Queue" tile so each user sees only what they
     /// can act on, not the whole pipeline.
