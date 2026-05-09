@@ -610,6 +610,8 @@ extension AppStore {
         objectWillChange.send()
         materialRequests[idx] = updated
         Task { await SyncEngine.shared.pushPendingMaterialRequests() }
+        // Mirror state onto the linked PO (no-op if not linked).
+        propagateReceiveToLinkedPO(from: updated)
         return true
     }
 
@@ -855,7 +857,116 @@ extension AppStore {
         objectWillChange.send()
         purchaseOrders[idx] = updated
         Task { await SyncEngine.shared.pushPendingPurchaseOrders() }
+        // Mirror state onto the linked MR (no-op if not linked).
+        propagateReceiveToLinkedMR(from: updated)
         return true
+    }
+
+    // MARK: Bidirectional receive propagation
+    //
+    // When PO and MR are linked (PO auto-created from MR's approval, or
+    // a PO was retroactively connected via materialRequestID), receiving
+    // one represents the same physical delivery — both records should
+    // reflect it. These helpers run after the primary receive transition
+    // so the audit trail on the source record is captured first, then
+    // the linked record's transition fires its own audit row.
+    //
+    // SAFETY
+    //   • Only propagates to records that are still "open" (waiting on
+    //     delivery). Refuses to touch a closed MR/PO so a late receive
+    //     doesn't reopen something that was administratively closed.
+    //   • Quantity propagation only happens when line item IDs match
+    //     1:1 between source and target — typically true when the PO
+    //     was auto-created from the MR. When line items have diverged
+    //     (manual edits on either side), only status + photo propagate
+    //     and the target keeps its own line-item state.
+    //   • Uses internal-only `_apply…` helpers so this doesn't recurse
+    //     back through the public receive methods → stack overflow.
+
+    /// PO was just received → mirror state onto the linked MR.
+    private func propagateReceiveToLinkedMR(from po: PurchaseOrder) {
+        guard let mrID = po.materialRequestID,
+              let mrIdx = materialRequests.firstIndex(where: { $0.id == mrID }) else { return }
+        var mr = materialRequests[mrIdx]
+        guard mr.status.isOpen || mr.status == .ordered || mr.status == .partial else { return }
+        _applyLinkedReceiveState(
+            sourceLineItems:  po.lineItems,
+            sourcePhotoURL:   po.deliveryPhotoURL,
+            targetLineItems:  &mr.lineItems
+        )
+        applyMRStatusRollup(&mr)
+        mr.updatedAt  = Date()
+        mr.syncStatus = .pending
+        materialRequests[mrIdx] = mr
+        Task { await SyncEngine.shared.pushPendingMaterialRequests() }
+    }
+
+    /// MR was just received → mirror state onto the linked PO.
+    private func propagateReceiveToLinkedPO(from mr: MaterialRequest) {
+        guard let poID = mr.purchaseOrderID,
+              let poIdx = purchaseOrders.firstIndex(where: { $0.id == poID }) else { return }
+        var po = purchaseOrders[poIdx]
+        guard [.draft, .sent, .confirmed, .partial].contains(po.status) else { return }
+        _applyLinkedReceiveState(
+            sourceLineItems:  mr.lineItems,
+            sourcePhotoURL:   mr.deliveryPhotoURL,
+            targetLineItems:  &po.lineItems
+        )
+        applyPOStatusRollup(&po)
+        po.updatedAt  = Date()
+        po.syncStatus = .pending
+        purchaseOrders[poIdx] = po
+        Task { await SyncEngine.shared.pushPendingPurchaseOrders() }
+    }
+
+    /// Shared core: copy quantities + photo URL from source's line items
+    /// to target's matching line items. Only mutates a target line when
+    /// its ID matches a source line — preserves rows that have diverged.
+    private func _applyLinkedReceiveState(
+        sourceLineItems: [MaterialLineItem],
+        sourcePhotoURL: String?,
+        targetLineItems: inout [MaterialLineItem]
+    ) {
+        let bySourceID = Dictionary(uniqueKeysWithValues:
+            sourceLineItems.map { ($0.id, $0.quantityReceived) }
+        )
+        targetLineItems = targetLineItems.map { item in
+            var copy = item
+            if let qty = bySourceID[item.id] {
+                copy.quantityReceived = qty
+            }
+            return copy
+        }
+    }
+
+    /// MR-side status rollup. Pulled out of receiveMaterialRequest so
+    /// propagation can recompute without duplicating the rules.
+    /// Photo gate matches the receive method: no photo → max .partial,
+    /// never .delivered.
+    private func applyMRStatusRollup(_ mr: inout MaterialRequest) {
+        let allReceived = !mr.lineItems.isEmpty
+            && mr.lineItems.allSatisfy { $0.isFullyReceived }
+        let anyReceived = mr.lineItems.contains { $0.quantityReceived > 0 }
+        if allReceived && mr.deliveryPhotoURL?.isEmpty == false {
+            mr.status     = .delivered
+            mr.receivedAt = mr.receivedAt ?? Date()
+            mr.receivedByID = mr.receivedByID ?? currentUser?.id
+        } else if anyReceived {
+            mr.status = .partial
+        }
+    }
+
+    /// PO-side status rollup. Same shape as MR side but uses POStatus.
+    private func applyPOStatusRollup(_ po: inout PurchaseOrder) {
+        let allReceived = !po.lineItems.isEmpty
+            && po.lineItems.allSatisfy { $0.isFullyReceived }
+        let anyReceived = po.lineItems.contains { $0.quantityReceived > 0 }
+        if allReceived && po.deliveryPhotoURL?.isEmpty == false {
+            po.status       = .received
+            po.receivedDate = po.receivedDate ?? Date()
+        } else if anyReceived {
+            po.status = .partial
+        }
     }
 
     /// Mark a PO as sent to the supplier. Called after the email dispatch
