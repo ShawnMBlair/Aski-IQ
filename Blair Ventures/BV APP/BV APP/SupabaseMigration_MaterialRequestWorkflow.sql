@@ -718,38 +718,35 @@ revoke execute on function public.current_user_is_admin_or_pm() from anon;
 grant  execute on function public.current_user_is_admin_or_pm() to authenticated;
 
 -- =========================================================
--- 18. Number-collision defense — UNIQUE on per-company numbers
+-- 18. Number-collision defense — partial UNIQUE on live rows only
 -- =========================================================
 -- The Swift client picks request_number / po_number from a local
--- materialRequests.count + 1 / purchaseOrders.count + 1. Two devices
--- offline at the same count value will both emit the same number;
--- when they reconnect, both rows push without complaint and the
--- pipeline ends up with duplicates.
+-- max+1 within (company, year). Two devices offline at the same max
+-- both emit the same number; when they reconnect, both rows push and
+-- the pipeline ends up with duplicates unless the DB rejects one.
 --
--- Adding a per-company unique constraint forces the second device's
--- push to fail at the DB layer, which the sync engine retries with
--- the next number. Net effect: the worst-case is a deferred push,
--- not a corrupted dataset.
+-- IMPORTANT: must be a PARTIAL unique index (WHERE is_deleted = false),
+-- NOT a table-level UNIQUE constraint. The non-partial form would block
+-- a fresh client from re-using a number that was previously soft-deleted
+-- — which is wrong: soft-deleted rows should not permanently burn their
+-- number. The first cut of this section used a non-partial UNIQUE and
+-- broke a live device whose local store was empty (no visibility into
+-- soft-deleted prod rows) — see commit history for the partial-index
+-- fix that landed this form.
 --
--- Wrapped in a DO block so re-runs don't error on the duplicate
--- constraint name; uses a short, predictable name so future schema
--- inspections find it.
-do $$
-begin
-    if not exists (
-        select 1 from pg_constraint
-        where conname = 'material_requests_company_request_number_unique'
-    ) then
-        alter table public.material_requests
-        add constraint material_requests_company_request_number_unique
-        unique (company_id, request_number);
-    end if;
-    if not exists (
-        select 1 from pg_constraint
-        where conname = 'purchase_orders_company_po_number_unique'
-    ) then
-        alter table public.purchase_orders
-        add constraint purchase_orders_company_po_number_unique
-        unique (company_id, po_number);
-    end if;
-end $$;
+-- Drop both the constraint variant (legacy) and the index variant before
+-- re-creating, so the migration is idempotent regardless of which shape
+-- a previous run installed.
+alter table public.material_requests
+    drop constraint if exists material_requests_company_request_number_unique;
+drop index if exists public.material_requests_company_request_number_unique;
+create unique index material_requests_company_request_number_unique
+    on public.material_requests (company_id, request_number)
+    where is_deleted = false;
+
+alter table public.purchase_orders
+    drop constraint if exists purchase_orders_company_po_number_unique;
+drop index if exists public.purchase_orders_company_po_number_unique;
+create unique index purchase_orders_company_po_number_unique
+    on public.purchase_orders (company_id, po_number)
+    where is_deleted = false;
