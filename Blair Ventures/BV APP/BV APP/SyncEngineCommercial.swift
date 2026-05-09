@@ -1198,6 +1198,13 @@ extension SyncEngine {
                 let tax_rate: Double
                 let line_items_json: String?
                 let delivery_photo_url: String?
+                // Invoice match (Phase 3)
+                let invoice_number, invoice_scan_path, invoice_match_note: String?
+                let invoice_date: String?
+                let invoice_amount: Decimal?
+                let invoice_matched_at: String?
+                let invoice_matched_by: String?
+                let invoice_flagged: Bool?
             }
             let rows: [Row] = try await supabase
                 .from(SupabaseTable.purchaseOrders)
@@ -1226,6 +1233,14 @@ extension SyncEngine {
                 po.taxRate         = fromDouble(row.tax_rate)
                 po.lineItems       = decodeJSON(row.line_items_json, as: [MaterialLineItem].self) ?? []
                 po.deliveryPhotoURL = row.delivery_photo_url
+                po.invoiceNumber    = row.invoice_number
+                po.invoiceDate      = parseDate(row.invoice_date)
+                po.invoiceAmount    = row.invoice_amount
+                po.invoiceScanPath  = row.invoice_scan_path
+                po.invoiceMatchedAt = parseDate(row.invoice_matched_at)
+                po.invoiceMatchedBy = row.invoice_matched_by.flatMap { UUID(uuidString: $0) }
+                po.invoiceMatchNote = row.invoice_match_note
+                po.invoiceFlagged   = row.invoice_flagged ?? false
                 po.syncStatus      = .synced
                 merged.removeAll { $0.id == uuid }
                 merged.append(po)
@@ -1252,6 +1267,12 @@ extension SyncEngine {
                     let tax_rate: Double
                     let line_items_json: String?
                     let delivery_photo_url: String?
+                    let invoice_number, invoice_scan_path, invoice_match_note: String?
+                    let invoice_date: String?
+                    let invoice_amount: Decimal?
+                    let invoice_matched_at: String?
+                    let invoice_matched_by: String?
+                    let invoice_flagged: Bool
                     let is_deleted: Bool
                     let deleted_at: String?
                     let deleted_by: String?
@@ -1273,6 +1294,14 @@ extension SyncEngine {
                     tax_rate:         toDouble(po.taxRate),
                     line_items_json:  jsonString(po.lineItems),
                     delivery_photo_url: po.deliveryPhotoURL,
+                    invoice_number:    po.invoiceNumber,
+                    invoice_scan_path: po.invoiceScanPath,
+                    invoice_match_note: po.invoiceMatchNote,
+                    invoice_date:      po.invoiceDate.map { isoDateFmt.string(from: $0) },
+                    invoice_amount:    po.invoiceAmount,
+                    invoice_matched_at: po.invoiceMatchedAt.map { isoFull.string(from: $0) },
+                    invoice_matched_by: po.invoiceMatchedBy?.uuidString,
+                    invoice_flagged:   po.invoiceFlagged,
                     is_deleted:       po.isDeleted,
                     deleted_at:       po.deletedAt.map { isoFull.string(from: $0) },
                     deleted_by:       po.deletedBy

@@ -215,13 +215,27 @@ check (
 );
 
 -- =========================================================
--- 4a. Purchase Orders — delivery proof photo
+-- 4a. Purchase Orders — delivery proof photo + invoice match fields
 -- =========================================================
--- Mirrors material_requests.delivery_photo_url. Required by the PO
--- receive flow (Procurement.receivePurchaseOrder + ReceiveItemsSheet)
--- to gate final .received status the same way the MR side does.
+-- delivery_photo_url mirrors material_requests.delivery_photo_url —
+-- required by the PO receive flow's photo gate.
+-- invoice_* columns power the Phase 3 invoice 3-way matching workflow:
+-- supplier invoice number/date/amount + scan path are stamped on the
+-- PO when an office-admin / manager runs the Invoice Match sheet.
 alter table public.purchase_orders
-add column if not exists delivery_photo_url text null;
+add column if not exists delivery_photo_url text null,
+add column if not exists invoice_number text null,
+add column if not exists invoice_date date null,
+add column if not exists invoice_amount numeric(14,2) null,
+add column if not exists invoice_scan_path text null,
+add column if not exists invoice_matched_at timestamptz null,
+add column if not exists invoice_matched_by uuid null references auth.users(id),
+add column if not exists invoice_match_note text null,
+add column if not exists invoice_flagged boolean not null default false;
+
+create index if not exists idx_purchase_orders_invoice_flagged
+on public.purchase_orders(invoice_flagged)
+where invoice_flagged = true;
 
 -- =========================================================
 -- 5. Material request items table

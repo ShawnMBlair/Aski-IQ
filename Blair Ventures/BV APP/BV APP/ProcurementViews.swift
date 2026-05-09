@@ -187,6 +187,19 @@ struct ProcurementHubView: View {
                         requests: store.rejectedMaterialRequests
                     )
                 }
+                // Invoice Review — Phase 3 surface for POs with flagged
+                // variance. Only shown when there are any flagged POs so
+                // it doesn't sit empty pre-Phase-3-usage.
+                if !store.posNeedingInvoiceReview.isEmpty {
+                    Divider().padding(.leading, 60)
+                    poPipelineRow(
+                        title:   "Invoice Review",
+                        detail:  "Supplier invoice variance flagged for follow-up",
+                        icon:    "doc.text.magnifyingglass",
+                        color:   .orange,
+                        pos:     store.posNeedingInvoiceReview
+                    )
+                }
             }
             .background(Color(.secondarySystemBackground))
             .cornerRadius(12)
@@ -234,6 +247,44 @@ struct ProcurementHubView: View {
         }
         .buttonStyle(.plain)
         .disabled(requests.isEmpty)
+    }
+
+    /// Same shape as pipelineRow but for POs (Phase 3 invoice review).
+    /// Tapping drills into the legacy PO list filtered to flagged rows;
+    /// could be tightened later to its own filtered list view.
+    private func poPipelineRow(title: String,
+                                detail: String,
+                                icon: String,
+                                color: Color,
+                                pos: [PurchaseOrder]) -> some View {
+        NavigationLink {
+            POSectionListView(title: title, pos: pos)
+        } label: {
+            HStack(spacing: 14) {
+                Image(systemName: icon)
+                    .font(.body)
+                    .foregroundColor(.white)
+                    .frame(width: 32, height: 32)
+                    .background(color)
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.subheadline).bold()
+                    Text(detail).font(.caption2).foregroundColor(.secondary)
+                }
+                Spacer()
+                Text("\(pos.count)")
+                    .font(.subheadline).bold()
+                    .padding(.horizontal, 8).padding(.vertical, 2)
+                    .background(color.opacity(0.15))
+                    .foregroundColor(color)
+                    .clipShape(Capsule())
+                Image(systemName: "chevron.right")
+                    .font(.footnote).foregroundColor(.secondary)
+            }
+            .padding(.horizontal).padding(.vertical, 10)
+        }
+        .buttonStyle(.plain)
+        .disabled(pos.isEmpty)
     }
 
     // MARK: - Quick Actions
@@ -305,6 +356,35 @@ struct ProcurementSectionListView: View {
                 List {
                     ForEach(requests.sorted { $0.requestDate > $1.requestDate }) { mr in
                         NavigationLink { MRDetailView(request: mr) } label: { MRRow(request: mr) }
+                    }
+                }
+                .listStyle(.plain)
+            }
+        }
+        .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// Same shape as ProcurementSectionListView but for POs — drives the
+/// Hub's Invoice Review section in Phase 3.
+struct POSectionListView: View {
+    @EnvironmentObject var store: AppStore
+    let title: String
+    let pos: [PurchaseOrder]
+
+    var body: some View {
+        Group {
+            if pos.isEmpty {
+                ContentUnavailableView(
+                    "Nothing to review",
+                    systemImage: "checkmark.seal",
+                    description: Text("POs needing review will appear here.")
+                )
+            } else {
+                List {
+                    ForEach(pos.sorted { $0.issueDate > $1.issueDate }) { po in
+                        NavigationLink { PODetailView(po: po) } label: { PORow(po: po) }
                     }
                 }
                 .listStyle(.plain)
@@ -2226,6 +2306,332 @@ struct ReceiptScanRow: View {
     }
 }
 
+// MARK: - PO Invoice Match Sheet
+
+/// 3-way matching UI for supplier invoices against a Purchase Order.
+/// Shows requested / received / invoiced per line with variance, plus
+/// the supplier invoice header (number, date, total) and an optional
+/// scan of the paper invoice. Produces one of three outcomes:
+///   • Approve → status flips to .closed
+///   • Flag    → stays .received with invoiceFlagged = true (Hub badge)
+///   • Hold    → stays .received with the note attached, no flag
+struct POInvoiceMatchSheet: View {
+    @EnvironmentObject var store: AppStore
+    @Environment(\.dismiss) var dismiss
+    let po: PurchaseOrder
+    let onConfirm: (
+        _ number: String,
+        _ date: Date,
+        _ amount: Decimal,
+        _ quantities: [UUID: Decimal],
+        _ scanPath: String?,
+        _ outcome: AppStore.InvoiceMatchOutcome,
+        _ note: String?
+    ) -> Void
+
+    @State private var invoiceNumber: String = ""
+    @State private var invoiceDate:   Date = Date()
+    @State private var invoiceAmount: Decimal = 0
+    @State private var note: String = ""
+    @State private var quantities: [UUID: Decimal]
+
+    @State private var scanPath: String?
+    @State private var showScanner = false
+    @State private var isUploadingScan = false
+
+    init(po: PurchaseOrder,
+         onConfirm: @escaping (String, Date, Decimal, [UUID: Decimal], String?, AppStore.InvoiceMatchOutcome, String?) -> Void) {
+        self.po = po
+        self.onConfirm = onConfirm
+        // Seed invoiced qty with received qty as a smart default — most
+        // invoices match what was delivered, so the matcher just edits
+        // the lines that don't.
+        var seed: [UUID: Decimal] = [:]
+        for item in po.lineItems {
+            seed[item.id] = item.quantityInvoiced > 0
+                ? item.quantityInvoiced
+                : item.quantityReceived
+        }
+        _quantities    = State(initialValue: seed)
+        _invoiceNumber = State(initialValue: po.invoiceNumber ?? "")
+        _invoiceDate   = State(initialValue: po.invoiceDate ?? Date())
+        _invoiceAmount = State(initialValue: po.invoiceAmount ?? po.total)
+        _note          = State(initialValue: po.invoiceMatchNote ?? "")
+        _scanPath      = State(initialValue: po.invoiceScanPath)
+    }
+
+    /// True when at least one line's invoiced qty differs from received.
+    private var hasLineVariance: Bool {
+        po.lineItems.contains { item in
+            (quantities[item.id] ?? 0) != item.quantityReceived
+        }
+    }
+
+    /// Computed total based on invoiced qty × unit cost. Compared against
+    /// the matcher-entered invoiceAmount to surface header variance
+    /// (extra freight, taxes, missing line items).
+    private var computedTotal: Decimal {
+        po.lineItems.reduce(0) { acc, item in
+            let qty = quantities[item.id] ?? 0
+            return acc + (qty * item.unitCost).rounded(scale: 2)
+        }
+    }
+
+    private var headerVariance: Decimal { invoiceAmount - computedTotal }
+
+    private var canSave: Bool {
+        !invoiceNumber.trimmingCharacters(in: .whitespaces).isEmpty
+            && invoiceAmount > 0
+            && !isUploadingScan
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                invoiceHeaderSection
+                lineComparisonSection
+                varianceSection
+                scanSection
+                noteSection
+                outcomeSection
+            }
+            .navigationTitle("Match Invoice — \(po.poNumber)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { dismiss() }.disabled(isUploadingScan)
+                }
+            }
+            .sheet(isPresented: $showScanner) {
+                DocumentScannerView { scan in
+                    guard let scan = scan else { return }
+                    Task { await uploadInvoiceScan(scan) }
+                }
+                .ignoresSafeArea()
+            }
+        }
+    }
+
+    private var invoiceHeaderSection: some View {
+        Section {
+            HStack {
+                Text("Invoice #")
+                Text("*").foregroundColor(.red)
+                TextField("INV-12345", text: $invoiceNumber)
+                    .multilineTextAlignment(.trailing)
+                    .autocorrectionDisabled()
+            }
+            DatePicker("Invoice Date", selection: $invoiceDate, displayedComponents: .date)
+            HStack {
+                Text("Invoice Total")
+                Text("*").foregroundColor(.red)
+                Spacer()
+                TextField("0.00", value: $invoiceAmount, format: .number)
+                    .keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 120)
+                Text("$").foregroundColor(.secondary)
+            }
+        } header: {
+            Text("Supplier Invoice")
+        }
+    }
+
+    private var lineComparisonSection: some View {
+        Section {
+            ForEach(po.lineItems) { item in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.description).font(.subheadline).bold()
+                    HStack(spacing: 12) {
+                        comparisonCell("Req", value: decStr(item.quantity), color: .secondary)
+                        comparisonCell("Recv", value: decStr(item.quantityReceived),
+                                       color: item.isFullyReceived ? .green : .orange)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Inv").font(.caption2).foregroundColor(.secondary)
+                            TextField("0", value: Binding(
+                                get: { quantities[item.id] ?? 0 },
+                                set: { quantities[item.id] = max(0, $0) }
+                            ), format: .number)
+                                .keyboardType(.decimalPad)
+                                .multilineTextAlignment(.trailing)
+                                .frame(width: 60)
+                                .padding(.horizontal, 6).padding(.vertical, 4)
+                                .background(Color(.tertiarySystemBackground))
+                                .cornerRadius(6)
+                        }
+                        let invQty = quantities[item.id] ?? 0
+                        let variance = invQty - item.quantityReceived
+                        if variance != 0 {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("Δ").font(.caption2).foregroundColor(.secondary)
+                                Text(variance > 0 ? "+\(decStr(variance))" : decStr(variance))
+                                    .font(.caption).bold()
+                                    .foregroundColor(variance > 0 ? .red : .orange)
+                            }
+                        }
+                        Spacer()
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        } header: {
+            HStack {
+                Text("Line Comparison")
+                Spacer()
+                Text("Req · Recv · Inv · Δ").font(.caption2).foregroundColor(.secondary)
+            }
+        } footer: {
+            if hasLineVariance {
+                Label("One or more lines differ from what was received.", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption).foregroundColor(.orange)
+            }
+        }
+    }
+
+    private var varianceSection: some View {
+        Section {
+            HStack {
+                Text("Computed total (invoiced qty × unit cost):")
+                    .font(.caption).foregroundColor(.secondary)
+                Spacer()
+                Text(computedTotal.currencyString).font(.caption)
+            }
+            HStack {
+                Text("Invoice header total:").font(.caption).foregroundColor(.secondary)
+                Spacer()
+                Text(invoiceAmount.currencyString).font(.caption)
+            }
+            HStack {
+                Text("Header variance:").font(.caption).bold()
+                Spacer()
+                Text(headerVariance == 0
+                     ? "Matched"
+                     : (headerVariance > 0 ? "+\(headerVariance.currencyString)" : headerVariance.currencyString))
+                    .font(.caption).bold()
+                    .foregroundColor(headerVariance == 0 ? .green : .orange)
+            }
+        } footer: {
+            if headerVariance != 0 {
+                Text("Header doesn't match line subtotals — usually freight, tax, rounding, or missing line items.")
+                    .font(.caption2)
+            }
+        }
+    }
+
+    private var scanSection: some View {
+        Section {
+            if isUploadingScan {
+                HStack {
+                    ProgressView()
+                    Text("Uploading…").font(.caption).foregroundColor(.secondary)
+                }
+            } else if let path = scanPath, !path.isEmpty {
+                HStack {
+                    Label("Invoice attached", systemImage: "doc.text.fill")
+                        .foregroundColor(.green)
+                    Spacer()
+                    Button("Replace") { showScanner = true }.font(.caption)
+                }
+            } else {
+                Button {
+                    showScanner = true
+                } label: {
+                    Label("Scan Supplier Invoice", systemImage: "doc.viewfinder")
+                        .foregroundColor(.blue)
+                }
+            }
+        } header: {
+            Text("Invoice Document")
+        } footer: {
+            Text("Multi-page PDF stored on the PO. Optional but recommended for audit trail.")
+                .font(.caption2)
+        }
+    }
+
+    private var noteSection: some View {
+        Section {
+            TextField("Approver note (optional)", text: $note, axis: .vertical)
+                .lineLimit(2...5)
+        } header: {
+            Text("Note")
+        } footer: {
+            Text("Visible in the audit log. Use to explain accepted variance, hold reason, etc.")
+                .font(.caption2)
+        }
+    }
+
+    private var outcomeSection: some View {
+        Section {
+            Button {
+                save(.approve)
+            } label: {
+                Label("Approve & Close PO", systemImage: "checkmark.seal.fill")
+                    .foregroundColor(.green)
+            }
+            .disabled(!canSave)
+
+            Button {
+                save(.flag)
+            } label: {
+                Label("Flag Variance for Review", systemImage: "flag.fill")
+                    .foregroundColor(.orange)
+            }
+            .disabled(!canSave)
+
+            Button {
+                save(.hold)
+            } label: {
+                Label("Hold for Review", systemImage: "pause.circle.fill")
+                    .foregroundColor(.gray)
+            }
+            .disabled(!canSave)
+        } footer: {
+            Text("Approve closes the PO. Flag/Hold keep it received so the office can come back.")
+                .font(.caption2)
+        }
+    }
+
+    private func save(_ outcome: AppStore.InvoiceMatchOutcome) {
+        onConfirm(
+            invoiceNumber.trimmingCharacters(in: .whitespaces),
+            invoiceDate,
+            invoiceAmount,
+            quantities,
+            scanPath,
+            outcome,
+            note
+        )
+        dismiss()
+    }
+
+    private func uploadInvoiceScan(_ scan: VNDocumentCameraScan) async {
+        isUploadingScan = true
+        defer { isUploadingScan = false }
+        do {
+            scanPath = try await ReceiptScanService.shared.upload(
+                scan: scan,
+                requestID: po.id,           // re-use the per-entity folder layout
+                companyID: po.companyID ?? store.currentCompanyID
+            )
+        } catch {
+            ToastService.shared.error(error.localizedDescription)
+        }
+    }
+
+    private func comparisonCell(_ label: String, value: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label).font(.caption2).foregroundColor(.secondary)
+            Text(value).font(.caption).bold().foregroundColor(color)
+        }
+    }
+
+    private func decStr(_ d: Decimal) -> String {
+        let n = NSDecimalNumber(decimal: d)
+        if d == Decimal(Int(truncating: n)) { return "\(Int(truncating: n))" }
+        return n.stringValue
+    }
+}
+
 // MARK: - PO List
 
 struct POListContent: View {
@@ -2357,6 +2763,7 @@ struct PODetailView: View {
     @State private var showDeleteAlert = false
     @State private var isSendingToSupplier = false
     @State private var showReceiveSheet = false
+    @State private var showInvoiceMatchSheet = false
 
     init(po: PurchaseOrder) {
         self.po = po
@@ -2491,6 +2898,21 @@ struct PODetailView: View {
                             showReceiveSheet = true
                         }
                     }
+                    // Invoice match — available once items are received
+                    // (full or partial) and not yet closed. The sheet
+                    // surfaces 3-way comparison + outcome buttons.
+                    if [.received, .partial].contains(local.status)
+                        && [.officeAdmin, .manager, .executive].contains(store.currentUserRole) {
+                        let label = local.invoiceNumber == nil ? "Match Invoice" : "Re-match Invoice"
+                        poActionButton(label, icon: "doc.text.magnifyingglass",
+                                       color: local.invoiceFlagged ? .orange : .indigo) {
+                            showInvoiceMatchSheet = true
+                        }
+                        if local.invoiceFlagged {
+                            Text("Flagged for review — variance against invoice.")
+                                .font(.caption2).foregroundColor(.orange)
+                        }
+                    }
                     if store.currentUserRole == .projectManager || store.currentUserRole == .officeAdmin ||
                        store.currentUserRole == .manager || store.currentUserRole == .executive {
                         Button { showEdit = true } label: {
@@ -2522,6 +2944,21 @@ struct PODetailView: View {
                     local,
                     receivedQuantities: quantities,
                     deliveryPhotoURL:   photoPath
+                )
+                refreshLocal()
+            }
+        }
+        .sheet(isPresented: $showInvoiceMatchSheet, onDismiss: refreshLocal) {
+            POInvoiceMatchSheet(po: local) { number, date, amount, qty, scan, outcome, note in
+                store.matchInvoice(
+                    for:                local,
+                    invoiceNumber:      number,
+                    invoiceDate:        date,
+                    invoiceAmount:      amount,
+                    invoicedQuantities: qty,
+                    invoiceScanPath:    scan,
+                    outcome:            outcome,
+                    note:               note
                 )
                 refreshLocal()
             }

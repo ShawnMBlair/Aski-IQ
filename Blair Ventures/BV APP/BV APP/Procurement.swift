@@ -103,14 +103,15 @@ enum UnitOfMeasure: String, Codable, CaseIterable {
 // MARK: - Material Request Line Item
 
 struct MaterialLineItem: Identifiable, Codable, Equatable {
-    var id:               UUID    = UUID()
-    var description:      String
-    var quantity:         Decimal = 1
-    var quantityReceived: Decimal = 0   // Set by the Receive sheet on delivery
-    var unit:             UnitOfMeasure = .each
-    var unitCost:         Decimal = 0
-    var costCode:         String  = ""
-    var notes:            String  = ""
+    var id:                UUID    = UUID()
+    var description:       String
+    var quantity:          Decimal = 1
+    var quantityReceived:  Decimal = 0   // Set by the Receive sheet on delivery
+    var quantityInvoiced:  Decimal = 0   // Set by the Invoice Match sheet
+    var unit:              UnitOfMeasure = .each
+    var unitCost:          Decimal = 0
+    var costCode:          String  = ""
+    var notes:             String  = ""
 
     var totalCost: Decimal { (quantity * unitCost).rounded(scale: 2) }
 
@@ -124,6 +125,12 @@ struct MaterialLineItem: Identifiable, Codable, Equatable {
     var isPartiallyReceived: Bool {
         quantityReceived > 0 && quantityReceived < quantity
     }
+
+    /// Variance between received and invoiced quantities. Positive value
+    /// = supplier billed for more than was actually delivered (overcharge);
+    /// negative = supplier under-billed. Drives the variance flag on the
+    /// 3-way Invoice Match comparison.
+    var invoiceVariance: Decimal { quantityInvoiced - quantityReceived }
 }
 
 // MARK: - Material Request
@@ -314,6 +321,19 @@ struct PurchaseOrder: Identifiable, Codable, Equatable {
     // Required for the final .received status; partial receives can save
     // line-item progress without one. See receivePurchaseOrder above.
     var deliveryPhotoURL: String? = nil
+
+    // Supplier invoice tracking (Phase 3 — invoice 3-way matching).
+    // Populated by AppStore.matchInvoice + the Invoice Match sheet.
+    // invoiceAmount can differ from `total` when the supplier's invoice
+    // includes adjustments (extra charges, rebates, partial fills).
+    var invoiceNumber:    String? = nil
+    var invoiceDate:      Date?   = nil
+    var invoiceAmount:    Decimal? = nil
+    var invoiceScanPath:  String? = nil   // Supabase Storage path
+    var invoiceMatchedAt: Date?   = nil
+    var invoiceMatchedBy: UUID?   = nil
+    var invoiceMatchNote: String? = nil   // approver context, e.g. "approved despite +$50 freight"
+    var invoiceFlagged:   Bool    = false // true when matcher flagged a variance for follow-up
 
     // Tax
     var taxRate:       Decimal = 0.05
@@ -665,6 +685,23 @@ extension AppStore {
         materialRequests.filter { $0.status == .rejected && !$0.isDeleted }
     }
 
+    /// POs with an invoice variance flag — needs human review before the
+    /// procurement record can close. Drives the Hub's Invoice Review
+    /// section in Phase 3.
+    var posNeedingInvoiceReview: [PurchaseOrder] {
+        purchaseOrders.filter { $0.invoiceFlagged && !$0.isDeleted }
+    }
+
+    /// POs that have been received but no invoice has been matched yet.
+    /// These are the natural targets for the next "Match Invoice" action.
+    var posReadyForInvoiceMatch: [PurchaseOrder] {
+        purchaseOrders.filter {
+            ($0.status == .received || $0.status == .partial)
+                && $0.invoiceNumber == nil
+                && !$0.isDeleted
+        }
+    }
+
     // MARK: Duplicate detection
     //
     // CONTRACT
@@ -967,6 +1004,66 @@ extension AppStore {
         } else if anyReceived {
             po.status = .partial
         }
+    }
+
+    /// Match a supplier invoice against a PO. Captures the invoice
+    /// number / date / amount, scans the invoice document, records
+    /// per-line invoiced quantities, and either flips status to .closed
+    /// (approved without variance) or leaves it at .received with
+    /// `invoiceFlagged = true` for follow-up.
+    ///
+    /// `outcome` controls the terminal state:
+    ///   • .approve → flips to .closed (variance accepted as-is)
+    ///   • .flag    → stays .received with invoiceFlagged = true so the
+    ///                Hub surfaces it for review
+    ///   • .hold    → stays .received with note attached, no flag
+    ///                (matcher wants to verify offline before closing)
+    enum InvoiceMatchOutcome { case approve, flag, hold }
+
+    func matchInvoice(
+        for po: PurchaseOrder,
+        invoiceNumber: String,
+        invoiceDate: Date,
+        invoiceAmount: Decimal,
+        invoicedQuantities: [UUID: Decimal],
+        invoiceScanPath: String?,
+        outcome: InvoiceMatchOutcome,
+        note: String?
+    ) {
+        guard requireRole([.officeAdmin, .manager, .executive],
+                          action: "match_purchase_order_invoice") else { return }
+        guard let idx = purchaseOrders.firstIndex(where: { $0.id == po.id }) else { return }
+        var updated = po
+        updated.invoiceNumber    = invoiceNumber.trimmingCharacters(in: .whitespaces)
+        updated.invoiceDate      = invoiceDate
+        updated.invoiceAmount    = invoiceAmount
+        updated.invoiceScanPath  = invoiceScanPath ?? updated.invoiceScanPath
+        updated.invoiceMatchedAt = Date()
+        updated.invoiceMatchedBy = currentUser?.id
+        let trimmedNote = note?.trimmingCharacters(in: .whitespaces) ?? ""
+        updated.invoiceMatchNote = trimmedNote.isEmpty ? nil : trimmedNote
+        updated.invoiceFlagged   = outcome == .flag
+        // Apply per-line invoiced quantities. Lines without a map entry
+        // keep their existing value — supports incremental matching when
+        // the invoice covers a partial delivery.
+        updated.lineItems = updated.lineItems.map { item in
+            var copy = item
+            if let qty = invoicedQuantities[item.id] {
+                copy.quantityInvoiced = qty
+            }
+            return copy
+        }
+        switch outcome {
+        case .approve:
+            updated.status = .closed
+        case .flag, .hold:
+            updated.status = .received   // remains received; the flag/hold lives on the row
+        }
+        updated.updatedAt  = Date()
+        updated.syncStatus = .pending
+        objectWillChange.send()
+        purchaseOrders[idx] = updated
+        Task { await SyncEngine.shared.pushPendingPurchaseOrders() }
     }
 
     /// Mark a PO as sent to the supplier. Called after the email dispatch
