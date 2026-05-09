@@ -149,6 +149,12 @@ final class SyncEngine: ObservableObject {
         }
 
         lastSyncAt = Date()
+        // Phase 2 stabilization: signal that the first full pull is
+        // done so create flows that depend on a populated local store
+        // (MR / PO today, other modules to follow) can unlock. Set on
+        // every successful pullAll, not just the first one — if the
+        // user signed out and back in, the flag may have been reset.
+        await MainActor.run { store.hasCompletedFirstSync = true }
         store.saveToDiskImmediately()
 
         // Run compliance sweep — fires cert/equipment alerts

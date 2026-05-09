@@ -63,6 +63,32 @@ final class AppStore: ObservableObject {
     /// "RLS or FK violation."
     @Published var syncErrors: [UUID: SyncErrorInfo] = [:]
 
+    /// Phase 2 stabilization: tracks whether the first full pull has
+    /// completed since this device installed the app. Backed by
+    /// UserDefaults so a quit-and-relaunch keeps the flag set.
+    ///
+    /// Used to gate sensitive create flows (MR / PO today; other modules
+    /// to follow) so a fresh-install user can't emit a record that
+    /// references a project / client / opportunity their local store
+    /// hasn't pulled yet — that path produces silent duplicate-number
+    /// collisions, FK violations, and the auto-link-trigger NOT NULL
+    /// failures we saw on 2026-05-09.
+    ///
+    /// Set to true in three places:
+    ///   • SyncEngine.pullAll on successful completion (the canonical
+    ///     "first sync done" signal).
+    ///   • AppStore.init when the on-disk store already has data
+    ///     (existing users upgrading to this build don't see the gate).
+    ///   • Manual override via Admin Panel — escape hatch if a tenant
+    ///     hits a bug with the gate logic; never expected in normal use.
+    @Published var hasCompletedFirstSync: Bool = {
+        UserDefaults.standard.bool(forKey: "bv_has_completed_first_sync")
+    }() {
+        didSet {
+            UserDefaults.standard.set(hasCompletedFirstSync, forKey: "bv_has_completed_first_sync")
+        }
+    }
+
     /// Phase 12 follow-up: cache of all profiles in the current tenant
     /// (id + role + email), pulled from the `profiles` table. Used by
     /// QuoteApprovalNotifier to email the actual matching managers /

@@ -12,6 +12,37 @@ import VisionKit
 /// (received/closed/cancelled) lock for the same reason: their
 /// line items have been booked downstream and editing here would
 /// silently shift the procurement record.
+///
+/// Phase 2 stabilization: gating banner shown above the procurement hub
+/// (and the create flows) when the device hasn't completed its first
+/// full sync. Prevents the empty-local-store class of bugs where a
+/// fresh-install user creates an MR with a stale or null project_id /
+/// supplier_id reference, then hits FK / NOT NULL / duplicate-number
+/// failures that would have been avoided by waiting ~3 seconds for the
+/// initial pull. Reusable across modules — drop into any view that has
+/// a sensitive create flow.
+struct FirstLaunchSyncGateBanner: View {
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            ProgressView()
+                .progressViewStyle(.circular)
+                .controlSize(.small)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Setting up — first sync in progress")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundColor(.primary)
+                Text("Please wait until your projects, clients, and suppliers finish loading before creating new records. This usually takes a few seconds.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(12)
+        .background(Color.blue.opacity(0.08))
+        .cornerRadius(10)
+    }
+}
+
 struct ProcurementLockedBanner: View {
     let reason: String
     let detail: String
@@ -54,6 +85,10 @@ struct ProcurementHubView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 16) {
+                    if !store.hasCompletedFirstSync {
+                        FirstLaunchSyncGateBanner()
+                            .padding(.horizontal)
+                    }
                     myQueueCard
                     pipelineSection
                     quickActionsSection
@@ -65,9 +100,20 @@ struct ProcurementHubView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Menu {
-                        NavigationLink {
-                            MRCreateEditView(request: nil, preselectedProjectID: nil)
-                        } label: { Label("New Request", systemImage: "plus.square") }
+                        // Phase 2 first-launch sync gate: disable the
+                        // create entry while the initial pull is in
+                        // flight so a fresh-install user can't emit a
+                        // record referencing not-yet-pulled projects /
+                        // suppliers / opportunities. Browse stays
+                        // enabled — it's read-only.
+                        if store.hasCompletedFirstSync {
+                            NavigationLink {
+                                MRCreateEditView(request: nil, preselectedProjectID: nil)
+                            } label: { Label("New Request", systemImage: "plus.square") }
+                        } else {
+                            Label("Syncing — please wait", systemImage: "arrow.clockwise")
+                                .foregroundColor(.secondary)
+                        }
                         Divider()
                         NavigationLink {
                             ProcurementBrowseView()
