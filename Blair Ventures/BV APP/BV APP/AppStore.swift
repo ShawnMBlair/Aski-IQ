@@ -54,6 +54,15 @@ final class AppStore: ObservableObject {
     @Published var clientPricings:       [ClientPricing]      = []
     @Published var importBatches:        [ImportBatch]        = []
 
+    /// Per-record sync error metadata. Populated by sync push catch
+    /// blocks via `recordSyncError(id:error:)`; cleared on successful
+    /// retry / discard. In-memory only — failed records reattempt on
+    /// the next push cycle, so persisting the error string across app
+    /// launches doesn't add value. Surfaced in FailedSyncDetailView so
+    /// operators can see the actual reason instead of a generic
+    /// "RLS or FK violation."
+    @Published var syncErrors: [UUID: SyncErrorInfo] = [:]
+
     /// Phase 12 follow-up: cache of all profiles in the current tenant
     /// (id + role + email), pulled from the `profiles` table. Used by
     /// QuoteApprovalNotifier to email the actual matching managers /

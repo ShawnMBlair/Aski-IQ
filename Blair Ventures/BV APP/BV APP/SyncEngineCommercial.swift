@@ -1175,10 +1175,25 @@ extension SyncEngine {
                     store.materialRequests[i].syncStatus = .synced
                 }
                 store.materialRequests.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                // Phase 2 Failed-Sync visibility: clear any prior error
+                // metadata so a successful retry doesn't leave a stale
+                // reason on the row in the UI.
+                await MainActor.run { store.clearSyncError(id: mr.id) }
             } catch {
                 if let i = store.materialRequests.firstIndex(where: { $0.id == mr.id }) {
                     store.materialRequests[i].syncStatus = .failed
                 }
+                // Phase 2 Failed-Sync visibility: capture the error
+                // reason so FailedSyncDetailView can show it per row
+                // instead of the generic "RLS or FK violation" copy.
+                // Non-fatal — falls back to the legacy generic message
+                // if mapping yields an empty reason.
+                await MainActor.run { store.recordSyncError(id: mr.id, error: error) }
+                CrashReporter.capture(error: error, context: [
+                    "operation": "pushPendingMaterialRequests",
+                    "request_id":     mr.id.uuidString,
+                    "request_number": mr.requestNumber
+                ])
             }
         }
         store.saveMaterialRequests()
