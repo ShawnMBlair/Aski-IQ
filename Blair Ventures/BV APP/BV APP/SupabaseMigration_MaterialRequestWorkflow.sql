@@ -672,3 +672,81 @@ cross join (
     can_receive_materials
 )
 on conflict (company_id, role_key) do nothing;
+
+-- =========================================================
+-- 17. Hardening — surfaced by Supabase advisor on staging
+-- =========================================================
+
+-- Pin search_path on set_updated_at to match every other helper. The
+-- broader project's pin_function_search_path migration deliberately
+-- locks search_path on every SECURITY-sensitive function; this one
+-- was missed when the trigger function was added in section 7.
+alter function public.set_updated_at() set search_path = public;
+
+-- Trigger-only functions should not be reachable via PostgREST.
+-- They still need SECURITY DEFINER to bypass RLS on their target
+-- tables (audit log, item totals), but no client role should call
+-- them directly via /rest/v1/rpc/<name>. Postgres grants EXECUTE to
+-- PUBLIC by default when CREATE FUNCTION runs, so revoking only from
+-- `anon`/`authenticated` is a no-op (they inherit from PUBLIC).
+-- Revoke from PUBLIC and explicitly from anon/authenticated as a
+-- belt-and-suspenders defense.
+revoke execute on function public.log_material_request_status_change()       from public;
+revoke execute on function public.log_material_request_status_change()       from anon, authenticated;
+revoke execute on function public.material_request_items_recalculate_total() from public;
+revoke execute on function public.material_request_items_recalculate_total() from anon, authenticated;
+revoke execute on function public.recalculate_material_request_total(uuid)   from public;
+revoke execute on function public.recalculate_material_request_total(uuid)   from anon, authenticated;
+
+-- The RLS helper functions (current_user_*) DO need to be callable
+-- by signed-in users — RLS policies invoke them on every query —
+-- but should not be reachable by `anon` (unauthenticated requests
+-- have no business introspecting role helpers, even though they'd
+-- return null without an auth.uid()).
+--
+-- Revoking only from anon doesn't work because Postgres grants
+-- EXECUTE to PUBLIC on CREATE FUNCTION; anon inherits from PUBLIC.
+-- Pattern: revoke from PUBLIC, grant explicitly to authenticated.
+revoke execute on function public.current_user_company_id()     from public;
+grant  execute on function public.current_user_company_id()     to authenticated;
+revoke execute on function public.current_user_role_key()       from public;
+grant  execute on function public.current_user_role_key()       to authenticated;
+revoke execute on function public.current_user_is_admin_or_pm() from public;
+grant  execute on function public.current_user_is_admin_or_pm() to authenticated;
+
+-- =========================================================
+-- 18. Number-collision defense — UNIQUE on per-company numbers
+-- =========================================================
+-- The Swift client picks request_number / po_number from a local
+-- materialRequests.count + 1 / purchaseOrders.count + 1. Two devices
+-- offline at the same count value will both emit the same number;
+-- when they reconnect, both rows push without complaint and the
+-- pipeline ends up with duplicates.
+--
+-- Adding a per-company unique constraint forces the second device's
+-- push to fail at the DB layer, which the sync engine retries with
+-- the next number. Net effect: the worst-case is a deferred push,
+-- not a corrupted dataset.
+--
+-- Wrapped in a DO block so re-runs don't error on the duplicate
+-- constraint name; uses a short, predictable name so future schema
+-- inspections find it.
+do $$
+begin
+    if not exists (
+        select 1 from pg_constraint
+        where conname = 'material_requests_company_request_number_unique'
+    ) then
+        alter table public.material_requests
+        add constraint material_requests_company_request_number_unique
+        unique (company_id, request_number);
+    end if;
+    if not exists (
+        select 1 from pg_constraint
+        where conname = 'purchase_orders_company_po_number_unique'
+    ) then
+        alter table public.purchase_orders
+        add constraint purchase_orders_company_po_number_unique
+        unique (company_id, po_number);
+    end if;
+end $$;
