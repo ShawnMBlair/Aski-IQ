@@ -1573,6 +1573,18 @@ struct MRCreateEditView: View {
             .first
     }
 
+    /// Material Sale selected as the destination, if it has line items.
+    /// Drives the Import from Material Sale button — only shows when the
+    /// requester picked a sale and that sale has product lines worth
+    /// pulling. Standard "fulfill a sale by ordering supplies" flow.
+    private var importableMaterialSale: MaterialSale? {
+        guard destinationType == .materialSale,
+              let saleID = selectedMaterialSaleID else { return nil }
+        return store.materialSales.first {
+            $0.id == saleID && !$0.lineItems.isEmpty && !$0.isDeleted
+        }
+    }
+
     /// Pre-populate quantities + line items from the user's last request.
     /// Skips fields that are already filled to avoid clobbering work in
     /// progress (e.g. a partially-typed item description).
@@ -1616,6 +1628,26 @@ struct MRCreateEditView: View {
         lineItems.append(contentsOf: imported)
     }
 
+    /// Convert a Material Sale's line items into MR line items.
+    /// Important: unitCost is left at 0 — the sale's unitPrice is what
+    /// we charge the customer, NOT what we pay the supplier. The
+    /// requester or supplier fills cost in. Description / qty / unit /
+    /// notes carry across so the requester doesn't retype.
+    private func importFromMaterialSale(_ sale: MaterialSale) {
+        let imported = sale.lineItems.map { item -> MaterialLineItem in
+            MaterialLineItem(
+                description:      item.description,
+                quantity:         item.quantity,
+                quantityReceived: 0,
+                unit:             UnitOfMeasure(rawValue: item.unit) ?? .each,
+                unitCost:         0,
+                costCode:         "",
+                notes:            item.notes
+            )
+        }
+        lineItems.append(contentsOf: imported)
+    }
+
     /// The Employee record (if any) for the currently signed-in user.
     /// `store.currentUser` is itself an Employee — used to default Requested
     /// By so field workers don't have to scroll the picker.
@@ -1627,13 +1659,16 @@ struct MRCreateEditView: View {
             .sorted { $0.saleNumber > $1.saleNumber }
     }
 
-    /// Quick-actions section — visible only on new requests. Surfaces the
-    /// two repeatable-create paths (Repeat Last Request / Import from
-    /// Estimate) at the top so the field user sees them before scrolling
-    /// through fields they may not need to fill manually.
+    /// Quick-actions section — visible only on new requests. Surfaces
+    /// the three repeatable-create paths (Repeat Last / Import from
+    /// Estimate / Import from Material Sale) at the top so the field
+    /// user sees them before scrolling through fields they may not need
+    /// to fill manually. Hidden when none of the three is applicable.
     @ViewBuilder
     private var quickActionsSection: some View {
-        if lastRequestForCurrentUser != nil || importableEstimate != nil {
+        if lastRequestForCurrentUser != nil
+            || importableEstimate != nil
+            || importableMaterialSale != nil {
             Section {
                 if let last = lastRequestForCurrentUser {
                     Button {
@@ -1667,10 +1702,26 @@ struct MRCreateEditView: View {
                         }
                     }
                 }
+                if let sale = importableMaterialSale {
+                    Button {
+                        importFromMaterialSale(sale)
+                    } label: {
+                        Label {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("Import from Material Sale").font(.subheadline).bold()
+                                Text("\(sale.lineItems.count) line item\(sale.lineItems.count == 1 ? "" : "s") from \(sale.saleNumber). Unit costs left blank for supplier pricing.")
+                                    .font(.caption2).foregroundColor(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: "cart.badge.plus")
+                                .foregroundColor(.green)
+                        }
+                    }
+                }
             } header: {
                 Text("Quick Start")
             } footer: {
-                Text("Pre-fills line items and supplier from a previous request or this project's estimate.")
+                Text("Pre-fills line items and supplier from a previous request, this project's estimate, or the linked material sale.")
                     .font(.caption2)
             }
         }
