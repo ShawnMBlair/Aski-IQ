@@ -14,7 +14,7 @@ Pattern (proven in procurement):
 | Material Requests | ✅ Procurement.swift | ✅ Section 18 of `SupabaseMigration_MaterialRequestWorkflow.sql` | Procurement PR |
 | Purchase Orders | ✅ Procurement.swift | ✅ Section 18 of `SupabaseMigration_MaterialRequestWorkflow.sql` | Procurement PR |
 | **Invoices** | ✅ Invoice.swift `nextInvoiceNumber` | ✅ `INV1_invoices_number_partial_unique.sql` | This PR |
-| Quotes | ⏳ Pending | ⏳ Pending | — |
+| **Quotes** | ✅ QuoteViews.swift `nextQuoteNumber` | ✅ `QUO1_quotes_number_partial_unique.sql` | This PR |
 | Contracts | ⏳ Pending | ⏳ Pending | — |
 | Sub-Contracts | ⏳ Pending | ⏳ Pending | — |
 | Daily Job Reports | ⏳ Pending (per-project) | ⏳ Pending | — |

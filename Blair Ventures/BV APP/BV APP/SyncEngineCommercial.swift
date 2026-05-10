@@ -2091,8 +2091,15 @@ extension SyncEngine {
                 try await supabase.from(SupabaseTable.quotes).upsert(row).execute()
                 store.markQuoteSynced(id: q.id, status: .synced)
                 store.quotes.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: q.id) }
             } catch {
                 store.markQuoteSynced(id: q.id, status: .failed)
+                await MainActor.run { store.recordSyncError(id: q.id, error: error) }
+                CrashReporter.capture(error: error, context: [
+                    "operation": "pushPendingQuotes",
+                    "quote_id":     q.id.uuidString,
+                    "quote_number": q.jobNumber
+                ])
             }
         }
     }
