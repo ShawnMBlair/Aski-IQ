@@ -59,7 +59,26 @@ final class SyncEngine: ObservableObject {
     private var realtimeTask: Task<Void, Never>? = nil
     private var realtimePullTask: Task<Void, Never>? = nil
     var crmRealtimeTask: Task<Void, Never>? = nil
-    private init() {}
+
+    /// Injectable data client used by migrated push/pull functions.
+    /// Production constructs SyncEngine via `init()` which uses
+    /// LiveSyncClient(supabase) — byte-identical to pre-Phase-5
+    /// behavior. Tests construct via `init(client:)` with a fake.
+    /// Functions still using the direct `supabase.from(...)` chain
+    /// migrate one at a time; both paths can coexist during the
+    /// migration without behavior drift.
+    let client: AskiSyncClient
+
+    private init() {
+        self.client = LiveSyncClient()
+    }
+
+    /// Test-only initializer. Marked internal so the BV APP Tests
+    /// target can construct an isolated SyncEngine with a fake client,
+    /// without exposing a public seam to the rest of the app.
+    init(client: AskiSyncClient) {
+        self.client = client
+    }
 
     // MARK: - Pull on Launch
 
@@ -2689,7 +2708,11 @@ final class SyncEngine: ObservableObject {
         }
     }
 
-    private func pushPendingDJRs() async {
+    // Internal (was private) so the BV APP Tests target can drive
+    // this push path with a FakeSyncClient via @testable import.
+    // No production call sites changed — this is just access-level
+    // relaxation for testability.
+    func pushPendingDJRs() async {
         let pending = store.allDailyJobReports().filter { $0.syncStatus == .pending || $0.syncStatus == .local }
         let _isoFmt: ISO8601DateFormatter = {
             let f = ISO8601DateFormatter()
@@ -2713,7 +2736,11 @@ final class SyncEngine: ObservableObject {
                 if let deletedAt = djr.deletedAt {
                     payload["deleted_at"] = .string(_isoFmt.string(from: deletedAt))
                 }
-                try await supabase.from(SupabaseTable.dailyJobReports).upsert(payload).execute()
+                // Phase 5 / Wave 2: migrated to AskiSyncClient. Live impl
+                // delegates to the same supabase.from(...).upsert(...).execute()
+                // chain, so prod behavior is unchanged. Tests can swap in a
+                // FakeSyncClient and assert on the recorded payload.
+                try await client.upsert(payload, into: SupabaseTable.dailyJobReports)
                 var updated = djr; updated.syncStatus = .synced
                 store.updateDJR(updated)
                 await MainActor.run { store.clearSyncError(id: djr.id) }
