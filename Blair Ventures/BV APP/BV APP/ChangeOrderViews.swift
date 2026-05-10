@@ -12,7 +12,7 @@ struct ChangeOrderListView: View {
     /// When provided, filters to a single project.
     var projectID: UUID? = nil
 
-    @State private var showCreate = false
+    @State private var flow: COCreateFlow? = nil
     @State private var filterStatus: ChangeOrderStatus? = nil
 
     private var filtered: [ChangeOrder] {
@@ -35,7 +35,7 @@ struct ChangeOrderListView: View {
                 items: filtered,
                 filterStatus: $filterStatus,
                 projectID: projectID,
-                showCreate: $showCreate
+                onAddTapped: { handleAddTap() }
             )
         }
         .navigationTitle(projectID != nil ? "Change Orders" : "All Change Orders")
@@ -44,15 +44,48 @@ struct ChangeOrderListView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 if store.currentUserRole.canManageCOs {
-                    Button { showCreate = true } label: {
+                    Button { handleAddTap() } label: {
                         Image(systemName: "plus")
                     }
                     .disabled(!store.hasCompletedFirstSync)
                 }
             }
         }
-        .sheet(isPresented: $showCreate) {
-            ChangeOrderCreateEditView(projectID: projectID ?? store.projects.first?.id ?? UUID())
+        // Phase 7 / Decision 1: route the toolbar `+` through a project
+        // picker when the list isn't already project-scoped. Previously
+        // the create sheet opened with a `UUID()` placeholder when no
+        // projects existed locally, which produced an FK-failing CO on
+        // push. Project-scoped variant skips the picker.
+        .sheet(item: $flow) { state in
+            switch state {
+            case .pickParent:
+                RequiredProjectPickerSheet { picked in
+                    flow = .create(picked)
+                }
+                .environmentObject(store)
+            case .create(let pid):
+                ChangeOrderCreateEditView(projectID: pid)
+                    .environmentObject(store)
+            }
+        }
+    }
+
+    private func handleAddTap() {
+        if let pid = projectID {
+            flow = .create(pid)
+        } else {
+            flow = .pickParent
+        }
+    }
+}
+
+private enum COCreateFlow: Identifiable {
+    case pickParent
+    case create(UUID)
+    var id: String {
+        switch self {
+        case .pickParent:      return "pickParent"
+        case .create(let id):  return "create-\(id.uuidString)"
         }
     }
 }
@@ -62,7 +95,7 @@ private struct COListBody: View {
     let items: [ChangeOrder]
     @Binding var filterStatus: ChangeOrderStatus?
     let projectID: UUID?
-    @Binding var showCreate: Bool
+    let onAddTapped: () -> Void
 
     var body: some View {
         List {
