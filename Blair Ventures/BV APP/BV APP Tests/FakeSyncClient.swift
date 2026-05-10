@@ -18,9 +18,14 @@ final class FakeSyncClient: AskiSyncClient {
 
     /// Every upsert call, in order. Tests inspect this to assert on
     /// payload shape (which keys + values pushed) and table routing.
-    struct UpsertCall: Equatable {
+    /// The original Encodable payload is captured both as the source
+    /// `Any` and as a normalized JSON-decoded `[String: Any]` so tests
+    /// can do dict-style assertions regardless of whether the caller
+    /// passed a typed struct or a dictionary.
+    struct UpsertCall {
         let table: String
-        let payload: [String: AnyJSON]
+        let original: Any
+        let dict: [String: Any]
     }
     private(set) var upserts: [UpsertCall] = []
 
@@ -49,12 +54,20 @@ final class FakeSyncClient: AskiSyncClient {
 
     // MARK: AskiSyncClient
 
-    func upsert(_ payload: [String: AnyJSON], into table: String) async throws {
+    func upsert<T: Encodable>(_ payload: T, into table: String) async throws {
         if let err = nextUpsertError {
             nextUpsertError = nil
             throw err
         }
-        upserts.append(.init(table: table, payload: payload))
+        // Encode → decode round-trip so tests can dict-inspect any
+        // typed Row struct uniformly. This is fast for the small
+        // payload shapes SyncEngine pushes (a few dozen keys).
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(payload)
+        let json = try JSONSerialization.jsonObject(with: data)
+        let dict = (json as? [String: Any]) ?? [:]
+        upserts.append(.init(table: table, original: payload, dict: dict))
     }
 
     func select<T: Decodable>(

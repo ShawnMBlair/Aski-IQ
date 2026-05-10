@@ -84,13 +84,10 @@ final class SyncEngineDJRPushTests: XCTestCase {
 
             await engine.pushPendingDJRs()
 
-            let payload = try XCTUnwrap(fake.upserts.first?.payload)
+            let dict = try XCTUnwrap(fake.upserts.first?.dict)
             // The report_number key must be present and equal — regression
             // guard against the pre-Phase-3 schema gap that omitted it.
-            guard case .string(let pushedNumber) = payload["report_number"] else {
-                return XCTFail("Expected report_number string in payload; got \(String(describing: payload["report_number"]))")
-            }
-            XCTAssertEqual(pushedNumber, "DJR-JOB123-007")
+            XCTAssertEqual(dict["report_number"] as? String, "DJR-JOB123-007")
         }
     }
 

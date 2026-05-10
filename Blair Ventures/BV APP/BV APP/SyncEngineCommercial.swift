@@ -1205,7 +1205,11 @@ extension SyncEngine {
                     deleted_at:        mr.deletedAt.map { isoFull.string(from: $0) },
                     deleted_by:        mr.deletedBy
                 )
-                try await supabase.from(SupabaseTable.materialRequests).upsert(row).execute()
+                // Phase 5 / Wave 2: migrated to AskiSyncClient seam.
+                // Live impl delegates to the same supabase chain so prod
+                // behavior is unchanged; the protocol seam unlocks unit
+                // tests with a FakeSyncClient.
+                try await client.upsert(row, into: SupabaseTable.materialRequests)
                 if let i = store.materialRequests.firstIndex(where: { $0.id == mr.id }) {
                     store.materialRequests[i].syncStatus = .synced
                 }
@@ -1356,15 +1360,30 @@ extension SyncEngine {
                     deleted_at:       po.deletedAt.map { isoFull.string(from: $0) },
                     deleted_by:       po.deletedBy
                 )
-                try await supabase.from(SupabaseTable.purchaseOrders).upsert(row).execute()
+                // Phase 5 / Wave 2: migrated to AskiSyncClient seam.
+                try await client.upsert(row, into: SupabaseTable.purchaseOrders)
                 if let i = store.purchaseOrders.firstIndex(where: { $0.id == po.id }) {
                     store.purchaseOrders[i].syncStatus = .synced
                 }
                 store.purchaseOrders.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                // Phase 2 Failed-Sync visibility (gap-fill alongside Wave 2):
+                // PO push was the one commercial push that didn't clear its
+                // sync error on success, so a stale "failed" reason could
+                // linger in the FailedSync UI after a successful retry.
+                await MainActor.run { store.clearSyncError(id: po.id) }
             } catch {
                 if let i = store.purchaseOrders.firstIndex(where: { $0.id == po.id }) {
                     store.purchaseOrders[i].syncStatus = .failed
                 }
+                // Phase 2 Failed-Sync visibility: capture per-row reason
+                // via SyncErrorMapper so PO push matches every other
+                // commercial push function.
+                await MainActor.run { store.recordSyncError(id: po.id, error: error) }
+                CrashReporter.capture(error: error, context: [
+                    "operation": "pushPendingPurchaseOrders",
+                    "po_id":      po.id.uuidString,
+                    "po_number":  po.poNumber
+                ])
             }
         }
         store.savePurchaseOrders()

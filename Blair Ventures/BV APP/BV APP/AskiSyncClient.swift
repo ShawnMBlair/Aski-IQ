@@ -49,7 +49,15 @@ protocol AskiSyncClient: Sendable {
 
     /// Upsert one payload into a table. Equivalent to:
     ///   supabase.from(table).upsert(payload).execute()
-    func upsert(_ payload: [String: AnyJSON], into table: String) async throws
+    /// Accepts any Encodable so both dict-style payloads
+    /// ([String: AnyJSON]) and typed Codable Row structs work without
+    /// per-call-site conversion. Sendable is intentionally NOT required
+    /// — many push functions construct their Row struct inside a
+    /// @MainActor-isolated function, which makes the conformance
+    /// MainActor-isolated rather than Sendable. The payload is consumed
+    /// inside the same task that creates it, so cross-actor transfer
+    /// concerns don't apply.
+    func upsert<T: Encodable>(_ payload: T, into table: String) async throws
 
     /// Select rows from a table with optional filters, decoding into T.
     /// Equivalent to:
@@ -99,7 +107,7 @@ struct LiveSyncClient: AskiSyncClient {
         self.client = client
     }
 
-    func upsert(_ payload: [String: AnyJSON], into table: String) async throws {
+    func upsert<T: Encodable>(_ payload: T, into table: String) async throws {
         try await client.from(table).upsert(payload).execute()
     }
 
