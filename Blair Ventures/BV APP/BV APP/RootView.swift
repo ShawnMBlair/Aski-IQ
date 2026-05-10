@@ -276,6 +276,11 @@ private struct MoreFieldOpsSection: View {
             NavigationLink(destination: ReportsHubView()) {
                 Label("Reports", systemImage: "chart.bar.fill")
             }
+            // Phase 8 / Track 6 / Gantt v1 — read-only project timeline.
+            // Visible to anyone in the More tab; writes deferred to v2.
+            NavigationLink(destination: GanttView()) {
+                Label("Project Timeline", systemImage: "calendar.day.timeline.left")
+            }
         }
     }
 }
