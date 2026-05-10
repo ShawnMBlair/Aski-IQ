@@ -76,6 +76,16 @@ struct ContractListView: View {
 
     var body: some View {
         List {
+            // Phase 7 / Wave 2: First-launch sync gate. Contracts
+            // reference clients, projects, opportunities — all
+            // server-resident.
+            if !store.hasCompletedFirstSync {
+                Section {
+                    FirstLaunchSyncGateBanner()
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                }
+            }
             Section {
                 Picker("Filter", selection: $filter) {
                     ForEach(ContractListFilter.allCases) { f in
@@ -134,6 +144,7 @@ struct ContractListView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
+                .disabled(!store.hasCompletedFirstSync)
             }
         }
         .sheet(isPresented: $showCreate) {

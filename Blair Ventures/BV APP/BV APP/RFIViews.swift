@@ -22,18 +22,29 @@ struct RFIListView: View {
     }
 
     var body: some View {
-        RFIListBody(items: items, filterStatus: $filterStatus, projectID: projectID)
-            .navigationTitle(projectID != nil ? "RFIs" : "All RFIs")
-            .navigationBarTitleDisplayMode(.inline)
-            .refreshable { await store.refreshAll() }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button { showCreate = true } label: { Image(systemName: "plus") }
-                }
+        VStack(spacing: 0) {
+            // Phase 7 / Wave 2: First-launch sync gate. RFIs reference
+            // projects (server-resident); blocking create until first
+            // pull arrives prevents the FK-on-push bug class.
+            if !store.hasCompletedFirstSync {
+                FirstLaunchSyncGateBanner()
+                    .padding(.horizontal)
+                    .padding(.top, 8)
             }
-            .sheet(isPresented: $showCreate) {
-                RFICreateEditView(projectID: projectID ?? store.projects.first?.id ?? UUID())
+            RFIListBody(items: items, filterStatus: $filterStatus, projectID: projectID)
+        }
+        .navigationTitle(projectID != nil ? "RFIs" : "All RFIs")
+        .navigationBarTitleDisplayMode(.inline)
+        .refreshable { await store.refreshAll() }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button { showCreate = true } label: { Image(systemName: "plus") }
+                    .disabled(!store.hasCompletedFirstSync)
             }
+        }
+        .sheet(isPresented: $showCreate) {
+            RFICreateEditView(projectID: projectID ?? store.projects.first?.id ?? UUID())
+        }
     }
 }
 
