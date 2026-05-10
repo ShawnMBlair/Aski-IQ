@@ -46,9 +46,9 @@ Wave 2 introduced `AskiSyncClient`, a narrow intent-shaped data-client protocol 
 
 `pullDJRs` (slice 4) is the migrated reference — see `SyncEngineDJRPushTests.test_pullDJRs_issuesCorrectSelectQuery` and `…_skipsExternalRoles` for the assertion shape.
 
-**Migration scope status:**
+**Migration scope status (Phase 5 / Wave 2 COMPLETE — slices 1–6):**
 - ✅ Push: all 31 single-row upserts on `SyncEngine` migrated (slices 1–3)
-- ✅ Pull: ~22 of 25 migrated (slices 4–5). The 3 remaining all need protocol additions: `pullAssignedProjects` uses `.select("project_id")` partial-column select + `.in("id", values: ids)` filter; `pullExceptionLogs` uses `.select("id,company_id,...")` partial-column select. These will join the seam when the protocol grows partial-column + `in` support.
+- ✅ Pull: all 25 select queries migrated (slices 4–6). Protocol now supports `.eq` / `.neq` / `.in_` filters + partial-column select (`columns: String`) + ordering + limit. Every read in the SyncEngine flows through `AskiSyncClient`.
 - ⬜ Multi-row pushes (e.g. `upsertBatch` for line items) — not yet on the protocol; add when first call site needs them
 - ⬜ Pull-side test coverage beyond DJR — mechanical follow-up; each migrated pull can get a test using `fake.cannedSelect[table] = [...]` to assert merge behavior into `AppStore`
 

@@ -585,12 +585,15 @@ final class SyncEngine: ObservableObject {
                     case projectId = "project_id"
                 }
             }
-            let assignments: [AssignmentRow] = try await supabase
-                .from(SupabaseTable.projectAssignments)
-                .select("project_id")
-                .eq("user_id", value: userID.uuidString)
-                .execute()
-                .value
+            let assignments: [AssignmentRow] = try await client.select(
+                AssignmentRow.self,
+                from: SupabaseTable.projectAssignments,
+                columns: "project_id",
+                filters: [.eq("user_id", userID.uuidString)],
+                orderBy: nil,
+                ascending: true,
+                limit: nil
+            )
 
             guard !assignments.isEmpty else {
                 store.projects = []
@@ -644,13 +647,14 @@ final class SyncEngine: ObservableObject {
                     case sampleDataCreatedBy   = "sample_data_created_by"
                 }
             }
-            let rows: [ProjectRow] = try await supabase
-                .from(SupabaseTable.projects)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .in("id", values: ids)
-                .execute()
-                .value
+            let rows: [ProjectRow] = try await client.select(
+                ProjectRow.self,
+                from: SupabaseTable.projects,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .in_("id", ids)
+                ]
+            )
 
             store.projects = rows.map { row in
                 var p = Project(name: row.name, clientName: row.clientName)
@@ -1543,15 +1547,18 @@ final class SyncEngine: ObservableObject {
                 let last_modified_by: String?
                 let is_deleted: Bool
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.exceptionLogs)
-                .select("id,company_id,exception_type,description,created_at,updated_at,timesheet_id,last_modified_by,is_deleted")
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .order("created_at", ascending: false)
-                .limit(500)
-                .execute()
-                .value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.exceptionLogs,
+                columns: "id,company_id,exception_type,description,created_at,updated_at,timesheet_id,last_modified_by,is_deleted",
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ],
+                orderBy: "created_at",
+                ascending: false,
+                limit: 500
+            )
 
             let iso = ISO8601DateFormatter()
             iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

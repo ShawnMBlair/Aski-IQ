@@ -33,6 +33,7 @@ final class FakeSyncClient: AskiSyncClient {
     /// behavior under test should issue particular queries.
     struct SelectCall: Equatable {
         let table: String
+        let columns: String
         let filters: [SyncFilter]
         let orderBy: String?
         let ascending: Bool
@@ -76,6 +77,7 @@ final class FakeSyncClient: AskiSyncClient {
     func select<T: Decodable>(
         _ type: T.Type,
         from table: String,
+        columns: String,
         filters: [SyncFilter],
         orderBy: String?,
         ascending: Bool,
@@ -85,7 +87,7 @@ final class FakeSyncClient: AskiSyncClient {
             nextSelectError = nil
             throw err
         }
-        selects.append(.init(table: table, filters: filters,
+        selects.append(.init(table: table, columns: columns, filters: filters,
                              orderBy: orderBy, ascending: ascending, limit: limit))
         guard let canned = cannedSelect[table] else { return [] }
         let typed = canned.compactMap { $0 as? T }

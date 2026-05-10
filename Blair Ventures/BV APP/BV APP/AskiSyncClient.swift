@@ -59,15 +59,18 @@ protocol AskiSyncClient: Sendable {
     /// concerns don't apply.
     func upsert<T: Encodable>(_ payload: T, into table: String) async throws
 
-    /// Select rows from a table with optional filters + ordering + limit,
-    /// decoding into T. Equivalent to:
-    ///   supabase.from(table).select().eq(...).eq(...)
+    /// Select rows from a table with optional column projection +
+    /// filters + ordering + limit, decoding into T. Equivalent to:
+    ///   supabase.from(table).select(columns).eq(...).in(...)
     ///     .order(orderBy, ascending: ...).limit(limit).execute().value
-    /// Pass `orderBy = nil` for unordered queries; `limit = nil` for no
-    /// explicit cap (Supabase has its own server-side cap).
+    /// Pass `columns = "*"` for the default full-row select; provide a
+    /// comma-separated subset (e.g. "id,company_id,exception_type") to
+    /// reduce row size on large tables. `orderBy = nil` for unordered;
+    /// `limit = nil` for no explicit cap.
     func select<T: Decodable>(
         _ type: T.Type,
         from table: String,
+        columns: String,
         filters: [SyncFilter],
         orderBy: String?,
         ascending: Bool,
@@ -76,17 +79,17 @@ protocol AskiSyncClient: Sendable {
 }
 
 extension AskiSyncClient {
-    /// Convenience overload — filters only, no ordering, no limit.
+    /// Convenience overload — full-row, filters only.
     func select<T: Decodable>(
         _ type: T.Type,
         from table: String,
         filters: [SyncFilter]
     ) async throws -> [T] {
-        try await select(type, from: table, filters: filters,
+        try await select(type, from: table, columns: "*", filters: filters,
                          orderBy: nil, ascending: true, limit: nil)
     }
 
-    /// Convenience overload — filters + ordering, no limit.
+    /// Convenience overload — full-row, filters + ordering.
     func select<T: Decodable>(
         _ type: T.Type,
         from table: String,
@@ -94,19 +97,32 @@ extension AskiSyncClient {
         orderBy: String,
         ascending: Bool = true
     ) async throws -> [T] {
-        try await select(type, from: table, filters: filters,
+        try await select(type, from: table, columns: "*", filters: filters,
                          orderBy: orderBy, ascending: ascending, limit: nil)
     }
 
-    /// Convenience overload — filters + limit, no ordering.
+    /// Convenience overload — full-row, filters + limit.
     func select<T: Decodable>(
         _ type: T.Type,
         from table: String,
         filters: [SyncFilter],
         limit: Int
     ) async throws -> [T] {
-        try await select(type, from: table, filters: filters,
+        try await select(type, from: table, columns: "*", filters: filters,
                          orderBy: nil, ascending: true, limit: limit)
+    }
+
+    /// Convenience overload — full-row, filters + ordering + limit.
+    func select<T: Decodable>(
+        _ type: T.Type,
+        from table: String,
+        filters: [SyncFilter],
+        orderBy: String?,
+        ascending: Bool,
+        limit: Int?
+    ) async throws -> [T] {
+        try await select(type, from: table, columns: "*", filters: filters,
+                         orderBy: orderBy, ascending: ascending, limit: limit)
     }
 }
 
@@ -117,21 +133,30 @@ extension AskiSyncClient {
 struct SyncFilter: Sendable {
     let column: String
     let op: Op
+    /// Single-value carrier (eq, neq). Empty for multi-value ops.
     let value: String
+    /// Multi-value carrier (in_). Empty for single-value ops.
+    let values: [String]
 
     enum Op: Sendable {
         case eq
         case neq
+        case in_
     }
 
     static func eq(_ column: String, _ value: String) -> SyncFilter {
-        .init(column: column, op: .eq, value: value)
+        .init(column: column, op: .eq, value: value, values: [])
     }
     static func eq(_ column: String, _ value: Bool) -> SyncFilter {
-        .init(column: column, op: .eq, value: value ? "true" : "false")
+        .init(column: column, op: .eq, value: value ? "true" : "false", values: [])
     }
     static func neq(_ column: String, _ value: String) -> SyncFilter {
-        .init(column: column, op: .neq, value: value)
+        .init(column: column, op: .neq, value: value, values: [])
+    }
+    /// Match where `column` is in the provided value list. Maps to
+    /// Postgrest's `.in("col", values: [...])` call.
+    static func in_(_ column: String, _ values: [String]) -> SyncFilter {
+        .init(column: column, op: .in_, value: "", values: values)
     }
 }
 
@@ -155,16 +180,18 @@ struct LiveSyncClient: AskiSyncClient {
     func select<T: Decodable>(
         _ type: T.Type,
         from table: String,
+        columns: String,
         filters: [SyncFilter],
         orderBy: String?,
         ascending: Bool,
         limit: Int?
     ) async throws -> [T] {
-        var query = client.from(table).select()
+        var query = client.from(table).select(columns)
         for filter in filters {
             switch filter.op {
             case .eq:  query = query.eq(filter.column, value: filter.value)
             case .neq: query = query.neq(filter.column, value: filter.value)
+            case .in_: query = query.in(filter.column, values: filter.values)
             }
         }
         // Postgrest's fluent chain returns different transformed-builder
