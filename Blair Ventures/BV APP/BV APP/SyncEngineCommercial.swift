@@ -872,7 +872,7 @@ extension SyncEngine {
     func pushPendingWorkflowSettings(_ setting: WorkflowSetting) async {
         do {
             struct Row: Codable {
-                let id, company_id, role_key: String
+                let id, company_id, role_key, action_key: String
                 let approval_limit_amount: Decimal
                 let can_self_approve: Bool
                 let can_create_material_request: Bool
@@ -886,6 +886,7 @@ extension SyncEngine {
                 id:                            setting.id.uuidString,
                 company_id:                    setting.companyID.uuidString,
                 role_key:                      setting.roleKey,
+                action_key:                    setting.actionKey,
                 approval_limit_amount:         setting.approvalLimitAmount,
                 can_self_approve:              setting.canSelfApprove,
                 can_create_material_request:   setting.canCreateMaterialRequest,
@@ -895,11 +896,11 @@ extension SyncEngine {
                 is_active:                     setting.isActive,
                 updated_at:                    isoFull.string(from: setting.updatedAt)
             )
-            // ON CONFLICT (company_id, role_key) — the migration creates a
-            // unique constraint on this pair, so upsert resolves to update.
+            // ON CONFLICT (company_id, role_key, action_key) — Wave 4 unique
+            // constraint replaces the legacy (company_id, role_key) pair.
             try await supabase
                 .from(SupabaseTable.workflowSettings)
-                .upsert(row, onConflict: "company_id,role_key")
+                .upsert(row, onConflict: "company_id,role_key,action_key")
                 .execute()
         } catch {
             print("⚠️ \(#function) failed: \(error)")
@@ -920,6 +921,7 @@ extension SyncEngine {
                 let id: String
                 let company_id: String
                 let role_key: String
+                let action_key: String?  // optional for legacy clients pre-WS1
                 let approval_limit_amount: Decimal
                 let can_self_approve: Bool
                 let can_create_material_request: Bool
@@ -945,6 +947,7 @@ extension SyncEngine {
                     id:                            id,
                     companyID:                     cid,
                     roleKey:                       row.role_key,
+                    actionKey:                     row.action_key ?? "material_request.approve",
                     approvalLimitAmount:           row.approval_limit_amount,
                     canSelfApprove:                row.can_self_approve,
                     canCreateMaterialRequest:      row.can_create_material_request,

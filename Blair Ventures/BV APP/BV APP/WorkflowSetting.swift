@@ -21,6 +21,13 @@ struct WorkflowSetting: Identifiable, Codable, Equatable {
     var id:                            UUID = UUID()
     var companyID:                     UUID
     var roleKey:                       String   // matches UserRole.rawValue
+    /// Phase 6 / Wave 4: which gated action this row governs. Defaults
+    /// to `material_request.approve` to match the WS1 migration's
+    /// column default — legacy pre-WS1 rows decode with this value.
+    /// New rows seeded by WS1 carry the action key explicitly. The
+    /// canPerform(action:amount:) lookup matches on (company, role,
+    /// action_key) tuple.
+    var actionKey:                     String   = "material_request.approve"
     var approvalLimitAmount:           Decimal  = 0
     var canSelfApprove:                Bool     = false
     var canCreateMaterialRequest:      Bool     = true
@@ -152,10 +159,13 @@ extension AppStore {
         if let i = workflowSettings.firstIndex(where: { $0.id == setting.id }) {
             workflowSettings[i] = updated
         } else if let i = workflowSettings.firstIndex(where: {
-            $0.companyID == setting.companyID && $0.roleKey == setting.roleKey
+            $0.companyID == setting.companyID
+                && $0.roleKey == setting.roleKey
+                && $0.actionKey == setting.actionKey
         }) {
-            // Same (company, role) but different ID — merge into the existing
-            // row so the unique constraint doesn't reject the upsert.
+            // Same (company, role, action) but different ID — merge into the
+            // existing row so the WS1 unique constraint doesn't reject the
+            // upsert.
             updated.id = workflowSettings[i].id
             workflowSettings[i] = updated
         } else {
@@ -176,50 +186,87 @@ extension AppStore {
     // Implementation today: per-action switch that calls into the
     // existing helpers / role checks. Behavior is identical to pre-Phase-6.
     //
-    // Implementation in Wave 3 (after WS1 migration lands on prod and
-    // the Swift WorkflowSetting struct gains an `actionKey` field): the
-    // switch is replaced with a `workflowSettings.first(where:)` lookup
-    // by (companyID, role, actionKey). Admins can then rebalance any
-    // action's role assignments + amount limits via the Workflow
-    // Settings admin UI without code changes — same model procurement
-    // already enjoys, extended to every other module.
+    // Wave 4 (current): the switch is now an engine-driven lookup.
+    // `canPerform` reads workflow_settings rows by (company, role,
+    // action_key). Admins can rebalance any action's role assignments
+    // + amount limits via the Workflow Settings admin UI without code
+    // changes — same model procurement already enjoyed, now extended
+    // to every other module.
+    //
+    // Two-path safety net:
+    //   - Engine path: workflowSettings has a row matching (company,
+    //     role, action) → use it.
+    //   - Fallback path: no row found (e.g. workflow_settings hasn't
+    //     pulled yet, or the seed missed a tuple) → delegate to the
+    //     legacy switch logic (canPerformLegacy). This guarantees
+    //     pre-pull / pre-WS1 clients keep working.
+    //
+    // To remove the fallback in a future wave: confirm the seed covers
+    // every ActionKey × every UserRole tuple, then delete
+    // canPerformLegacy and treat "missing row" as deny.
 
     /// Generalized capability check. The single public API every gating
     /// call-site should adopt. Returns true if the current user can
     /// perform the given action; for amount-gated actions, also enforces
     /// the per-role amount limit.
-    ///
-    /// - Parameter action: The ActionKey identifying the gated operation.
-    /// - Parameter amount: For amount-gated actions (approve / void /
-    ///   etc.), the dollar amount being decided. Pass nil for binary
-    ///   allow/deny actions.
-    /// - Returns: true if the action is permitted; false otherwise.
     func canPerform(action: ActionKey, amount: Decimal? = nil) -> Bool {
         let role = currentUserRole
+        let cid  = currentCompanyID
+
+        // Engine path: look up the (company, role, action) row.
+        let row = workflowSettings.first { setting in
+            setting.companyID == cid
+            && setting.roleKey == role.rawValue
+            && setting.actionKey == action.rawValue
+            && setting.isActive
+        }
+
+        if let row {
+            // For material_request.* actions, retain the legacy boolean
+            // gate semantics from pre-WS1 — those rows have meaningful
+            // can_create/can_approve/can_send/can_receive flags.
+            switch action {
+            case .materialRequestCreate:        return row.canCreateMaterialRequest
+            case .materialRequestApprove:
+                return row.canApproveMaterialRequest
+                    && (amount ?? 0) <= row.approvalLimitAmount
+            case .materialRequestSendToSupplier: return row.canSendToSupplier
+            case .materialRequestReceive:        return row.canReceiveMaterials
+            default:
+                break  // fall through to amount-gated / presence-gated check
+            }
+
+            // For non-MR actions (PO / quote / change order / etc.),
+            // presence of the row + matching action key = allowed.
+            // Amount-gated actions additionally require the row's
+            // approvalLimitAmount to cover the amount being decided.
+            if action.isAmountGated {
+                return (amount ?? 0) <= row.approvalLimitAmount
+            }
+            return true
+        }
+
+        // No row found — fall back to legacy switch logic so pre-pull
+        // / pre-WS1 clients still get a deterministic answer.
+        return canPerformLegacy(action: action, amount: amount, role: role)
+    }
+
+    /// Legacy switch-based implementation of canPerform. Kept as a
+    /// fallback path while we confirm the WS1 seed covers every
+    /// ActionKey × UserRole tuple in prod. Will be removed once the
+    /// engine has full coverage.
+    private func canPerformLegacy(action: ActionKey, amount: Decimal?, role: UserRole) -> Bool {
         switch action {
-
-        // MARK: Material Requests — already on workflow_settings
-        case .materialRequestCreate:
-            return canCreateMaterialRequest
-        case .materialRequestApprove:
-            return canApproveMaterialRequest(amount: amount ?? 0)
-        case .materialRequestSendToSupplier:
-            return canSendToSupplier
-        case .materialRequestReceive:
-            return canReceiveMaterials
-
-        // MARK: Purchase Orders — same role gates as MR for now
+        case .materialRequestCreate:        return canCreateMaterialRequest
+        case .materialRequestApprove:       return canApproveMaterialRequest(amount: amount ?? 0)
+        case .materialRequestSendToSupplier: return canSendToSupplier
+        case .materialRequestReceive:        return canReceiveMaterials
         case .purchaseOrderCreate:
             return [.projectManager, .officeAdmin, .manager, .executive, .owner].contains(role)
-        case .purchaseOrderSend:
-            return canSendToSupplier
-        case .purchaseOrderReceive:
-            return canReceiveMaterials
+        case .purchaseOrderSend:            return canSendToSupplier
+        case .purchaseOrderReceive:         return canReceiveMaterials
         case .purchaseOrderMatchInvoice:
             return [.officeAdmin, .manager, .executive, .owner].contains(role)
-
-        // MARK: Quotes — delegate to existing ApprovalAuthority helpers
-        // where they exist; otherwise straight role-list check.
         case .quoteApprove:
             return ApprovalAuthority.canApproveQuoteApproval(
                 for: role, quoteTotal: amount ?? 0
@@ -228,60 +275,34 @@ extension AppStore {
             return [.estimator, .projectManager, .officeAdmin, .manager, .executive, .owner].contains(role)
         case .quoteMarkAccepted, .quoteDecline:
             return [.projectManager, .officeAdmin, .manager, .executive, .owner].contains(role)
-
-        // MARK: Estimates
         case .estimateReview:
             return [.projectManager, .officeAdmin, .manager, .executive, .owner].contains(role)
         case .estimateApprove:
             return [.officeAdmin, .manager, .executive, .owner].contains(role)
-
-        // MARK: Invoices
         case .invoiceSend:
             return [.officeAdmin, .manager, .executive, .owner].contains(role)
         case .invoiceVoid:
             return [.manager, .executive, .owner].contains(role)
         case .invoiceRecordPayment:
             return [.officeAdmin, .manager, .executive, .owner].contains(role)
-
-        // MARK: Change Orders
-        case .changeOrderApprove:
+        case .changeOrderApprove, .changeOrderReject:
             return role.canApproveChangeOrder
-        case .changeOrderReject:
-            return role.canApproveChangeOrder
-
-        // MARK: Schedule
         case .scheduleEdit:
             return [.foreman, .projectManager, .officeAdmin, .manager, .executive, .owner].contains(role)
         case .scheduleOverrideConflict:
-            // No project-wide canOverrideConflict helper today; the
-            // SchedulingCommandCentreView uses an inline role check
-            // (canOverrideHighRisk = manager+). Mirroring it here so
-            // future call-sites get the same gate.
             return [.projectManager, .manager, .executive, .owner].contains(role)
         case .scheduleApproveRecommendation:
             return canApproveScheduleRecommendation
-
-        // MARK: Timesheets
         case .timesheetApprove:
             return role.canApproveTimesheets
         case .timesheetEditSubmitted:
             return [.officeAdmin, .manager, .executive, .owner].contains(role)
-
-        // MARK: RFIs
-        case .rfiAnswer:
+        case .rfiAnswer, .rfiClose:
             return [.projectManager, .officeAdmin, .manager, .executive, .owner].contains(role)
-        case .rfiClose:
-            return [.projectManager, .officeAdmin, .manager, .executive, .owner].contains(role)
-
-        // MARK: Contracts
-        case .contractApprove:
+        case .contractApprove, .subContractApprove:
             return [.officeAdmin, .manager, .executive, .owner].contains(role)
         case .contractTerminate:
             return [.manager, .executive, .owner].contains(role)
-        case .subContractApprove:
-            return [.officeAdmin, .manager, .executive, .owner].contains(role)
-
-        // MARK: Material Sales
         case .materialSaleApprove:
             return [.officeAdmin, .manager, .executive, .owner].contains(role)
         case .materialSaleVoid:
