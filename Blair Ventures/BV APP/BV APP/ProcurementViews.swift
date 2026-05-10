@@ -686,11 +686,12 @@ struct MRDetailView: View {
 
     /// True when the current user can approve THIS specific request — both
     /// (a) their role has approval rights, and (b) the request total is
-    /// within their per-role approval limit. Lookup goes through
-    /// AppStore.canApproveMaterialRequest(amount:) which reads the workflow
-    /// settings hydrated from Supabase, not a hardcoded role list.
+    /// within their per-role approval limit. Routed through the Phase 6
+    /// canPerform(action:amount:) shim so admin-driven workflow_settings
+    /// remain the source of truth and future engine swaps don't require
+    /// touching this view.
     private var canApprove: Bool {
-        store.canApproveMaterialRequest(amount: local.estimatedTotal)
+        store.canPerform(action: .materialRequestApprove, amount: local.estimatedTotal)
     }
 
     /// Routing copy for the Submit button — tells the user which role will

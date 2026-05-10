@@ -864,13 +864,13 @@ extension AppStore {
             switch mr.status {
             case .submitted:
                 // In the approval queue if the user can approve this amount.
-                return canApproveMaterialRequest(amount: mr.estimatedTotal)
+                return canPerform(action: .materialRequestApprove, amount: mr.estimatedTotal)
             case .approved:
                 // Ready-to-send items show for users who can dispatch them.
-                return canSendToSupplier
+                return canPerform(action: .materialRequestSendToSupplier)
             case .ordered, .partial:
                 // Receive-ready items show for users authorized to receive.
-                return canReceiveMaterials
+                return canPerform(action: .materialRequestReceive)
             default:
                 return false
             }
