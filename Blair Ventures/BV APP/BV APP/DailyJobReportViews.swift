@@ -275,7 +275,7 @@ struct DJRDetailView: View {
                     }
 
                     // Approve/Reject (submitted, manager-level)
-                    if localReport.status == .submitted && store.currentUserRole.canApproveTimesheets {
+                    if localReport.status == .submitted && store.canPerform(action: .timesheetApprove) {
                         HStack(spacing: 12) {
                             Button {
                                 var updated = localReport

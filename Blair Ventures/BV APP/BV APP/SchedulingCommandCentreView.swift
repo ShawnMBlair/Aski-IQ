@@ -972,7 +972,7 @@ struct ScheduleRecommendationReviewView: View {
     }
 
     private var canApprove: Bool {
-        store.canApproveScheduleRecommendation && recommendation.isActionable
+        store.canPerform(action: .scheduleApproveRecommendation) && recommendation.isActionable
     }
 
     var body: some View {

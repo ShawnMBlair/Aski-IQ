@@ -67,7 +67,7 @@ struct ApprovalQueueView: View {
     /// users who can actually approve them — for everyone else the
     /// queue would be read-only noise.
     private var pendingRecommendations: [ScheduleRecommendation] {
-        guard store.canApproveScheduleRecommendation else { return [] }
+        guard store.canPerform(action: .scheduleApproveRecommendation) else { return [] }
         return store.scheduleRecommendations
             .filter { $0.status.isInQueue }
             .sorted { $0.createdAt > $1.createdAt }
@@ -83,7 +83,7 @@ struct ApprovalQueueView: View {
     /// already enforces that, so for the queue card we just confirm
     /// the role has SOME approval right before surfacing the list.
     private var pendingTimesheets: [TimesheetEntry] {
-        guard store.currentUserRole.canApproveTimesheets else { return [] }
+        guard store.canPerform(action: .timesheetApprove) else { return [] }
         return store.pendingTimesheets()
     }
 
@@ -102,12 +102,8 @@ struct ApprovalQueueView: View {
     /// The DB policy `can_decide_quote_approval(...)` is the final
     /// gate — UI is defense-in-depth.
     private var pendingQuoteApprovals: [QuoteApproval] {
-        let role = store.currentUserRole
-        return store.pendingApprovals.filter { approval in
-            ApprovalAuthority.canApproveQuoteApproval(
-                for: role,
-                quoteTotal: approval.quoteTotal
-            ) != .blocked
+        store.pendingApprovals.filter { approval in
+            store.canPerform(action: .quoteApprove, amount: approval.quoteTotal)
         }
     }
 
@@ -115,7 +111,7 @@ struct ApprovalQueueView: View {
     /// approval gate is `canApproveChangeOrder` (manager / executive
     /// only). Submitted + under_review are the actionable states.
     private var pendingChangeOrders: [ChangeOrder] {
-        guard store.currentUserRole.canApproveChangeOrder else { return [] }
+        guard store.canPerform(action: .changeOrderApprove) else { return [] }
         return store.changeOrders
             .filter { !$0.isDeleted }
             .filter { $0.status == .submitted || $0.status == .underReview }
@@ -841,19 +837,14 @@ extension AppStore {
                 && ApprovalQueueView.normalizeName($0.internalReviewBy ?? "") == myNormalized
             }.count
         }
-        // Quote approvals at a tier I can satisfy.
-        // Phase 1 fix: migrate from legacy `ApprovalThreshold.canApprove`
-        // to the v3 helper so the badge matches the queue view's filter.
+        // Quote approvals at a tier I can satisfy. Routed through Phase 6
+        // canPerform shim so the badge matches the queue view's filter.
         let role = currentUserRole
         n += pendingApprovals.filter { approval in
-            ApprovalAuthority.canApproveQuoteApproval(
-                for: role,
-                quoteTotal: approval.quoteTotal
-            ) != .blocked
+            canPerform(action: .quoteApprove, amount: approval.quoteTotal)
         }.count
         // Change orders awaiting financial-impact approval.
-        // canApproveChangeOrder includes officeAdmin/manager/executive/owner.
-        if role.canApproveChangeOrder {
+        if canPerform(action: .changeOrderApprove) {
             n += changeOrders.filter {
                 !$0.isDeleted
                 && ($0.status == .submitted || $0.status == .underReview)
@@ -861,16 +852,18 @@ extension AppStore {
         }
         // Material requests submitted, gated by canApproveDomain so .owner
         // is included automatically (was hard-coded to a 4-role list pre-fix).
+        // Per-row amount gating happens in the queue view; the badge surfaces
+        // any submitted MR a role with approve rights might act on.
         if role.canApproveDomain(.materialRequest) {
             n += materialRequests.filter { !$0.isDeleted && $0.status == .submitted }.count
         }
         // AI schedule recommendations awaiting PM+ approval
-        if canApproveScheduleRecommendation {
+        if canPerform(action: .scheduleApproveRecommendation) {
             n += scheduleRecommendations.filter { $0.status.isInQueue }.count
         }
         // Timesheets — gate so the badge doesn't inflate for non-approving
         // roles (matches the queue view's section visibility).
-        if role.canApproveTimesheets {
+        if canPerform(action: .timesheetApprove) {
             n += pendingTimesheets().count
         }
         return n
