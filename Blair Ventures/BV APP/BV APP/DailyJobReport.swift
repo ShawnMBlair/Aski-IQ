@@ -318,12 +318,32 @@ extension AppStore {
 
     // MARK: Next report number
 
+    /// Auto-generates a sequential DJR number scoped to the project.
+    /// Phase 3: parsed-max+1 over (projectID, companyID), excluding
+    /// soft-deleted. Same correctness fix as the other modules.
+    ///
+    /// SCHEMA GAP: as of 2026-05-09, prod's `daily_job_reports` table
+    /// has no `report_number` column. Swift carries the field locally
+    /// but `pushPendingDJRs` doesn't include it in the upsert payload,
+    /// so DJR numbers are NEVER pushed and don't survive sync round-trips.
+    /// A partial unique index can't apply until the column is added to
+    /// the schema. Tracked in migrations/phase3_drafts/README.md.
     func nextDJRNumber(for projectID: UUID) -> String {
         let project = projects.first { $0.id == projectID }
         let prefix = project?.jobNumber ?? "PRJ"
-        let existing = dailyJobReports(for: projectID)
-        let next = existing.count + 1
-        return "DJR-\(prefix)-\(String(format: "%03d", next))"
+        let djrPrefix = "DJR-\(prefix)-"
+        let highest = allDailyJobReports()
+            .filter {
+                $0.projectID == projectID
+                    && $0.companyID == currentCompanyID
+                    && !$0.isDeleted
+            }
+            .compactMap { djr -> Int? in
+                guard djr.reportNumber.hasPrefix(djrPrefix) else { return nil }
+                return Int(djr.reportNumber.dropFirst(djrPrefix.count))
+            }
+            .max() ?? 0
+        return "\(djrPrefix)\(String(format: "%03d", highest + 1))"
     }
 
     // MARK: Private helpers

@@ -16,9 +16,10 @@ Pattern (proven in procurement):
 | **Invoices** | ✅ Invoice.swift `nextInvoiceNumber` | ✅ `INV1_invoices_number_partial_unique.sql` | This PR |
 | **Quotes** | ✅ QuoteViews.swift `nextQuoteNumber` | ✅ `QUO1_quotes_number_partial_unique.sql` | This PR |
 | **Change Orders** | ✅ ChangeOrder.swift `nextCONumber` | ✅ `CO1_change_orders_number_partial_unique.sql` (per-project scope) | This PR |
+| **RFIs** | ✅ RFI.swift `nextRFINumber` | ✅ `RFI1_rfis_number_partial_unique.sql` (per-project scope) | This PR |
+| **Daily Job Reports** | ✅ DailyJobReport.swift `nextDJRNumber` | ⚠️ Blocked — see Schema Gaps below | This PR (Swift only) |
 | Contracts | ⏳ Pending | ⏳ Pending | — |
 | Sub-Contracts | ⏳ Pending | ⏳ Pending | — |
-| Daily Job Reports | ⏳ Pending (per-project) | ⏳ Pending | — |
 | RFIs | ⏳ Pending (per-project) | ⏳ Pending | — |
 | Material Sales | ⏳ Audit needed | ⏳ TBD | — |
 
@@ -29,3 +30,10 @@ Migrations in this folder are independent and can be applied in any order — ea
 ## Operator notes
 
 After applying a migration, retry any rows in Failed Syncs that hit the legacy duplicate-number conflict — they should auto-pick the next available number on the second pass.
+
+## Schema gaps surfaced by the Phase 3 audit
+
+| Module | Gap | Impact | Action |
+|---|---|---|---|
+| Daily Job Reports | Prod `daily_job_reports` has no `report_number` / `number` column. Swift `DailyJobReport.reportNumber` exists locally but `pushPendingDJRs` doesn't include it in the upsert payload, so DJR numbers never reach the server. | DJR numbers are local-only — different devices show different numbers for the same DJR row. Audit / reporting can't reference a stable DJR identifier. Partial unique index can't apply until column is added. | Pre-Phase-3 migration to **add `report_number text` + backfill** is needed. Track as a separate ticket; the Swift correctness fix landed in this PR is a no-op until the column exists. |
+

@@ -310,10 +310,17 @@ extension SyncEngine {
                     store.rfis[i].syncStatus = .synced
                 }
                 store.rfis.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: rfi.id) }
             } catch {
                 if let i = store.rfis.firstIndex(where: { $0.id == rfi.id }) {
                     store.rfis[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: rfi.id, error: error) }
+                CrashReporter.capture(error: error, context: [
+                    "operation":   "pushPendingRFIs",
+                    "rfi_id":      rfi.id.uuidString,
+                    "rfi_number":  rfi.number
+                ])
             }
         }
         store.saveRFIs()

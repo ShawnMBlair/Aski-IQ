@@ -2708,9 +2708,21 @@ final class SyncEngine: ObservableObject {
                 try await supabase.from(SupabaseTable.dailyJobReports).upsert(payload).execute()
                 var updated = djr; updated.syncStatus = .synced
                 store.updateDJR(updated)
+                await MainActor.run { store.clearSyncError(id: djr.id) }
             } catch {
                 print("⚠️ \(#function) failed: \(error)")
-                CrashReporter.capture(error: error, context: ["operation": "\(#function)"])
+                // Phase 2 Failed-Sync visibility: DJR push previously
+                // only printed + sent to Sentry — failed rows weren't
+                // marked .failed, so they were invisible in the Failed
+                // Syncs UI. Now surface them properly.
+                var failed = djr; failed.syncStatus = .failed
+                store.updateDJR(failed)
+                await MainActor.run { store.recordSyncError(id: djr.id, error: error) }
+                CrashReporter.capture(error: error, context: [
+                    "operation":     "\(#function)",
+                    "djr_id":         djr.id.uuidString,
+                    "djr_number":     djr.reportNumber
+                ])
             }
         }
     }
