@@ -361,6 +361,10 @@ struct SettingsView: View {
     @State private var companyNameDraft      = ""
     @State private var isSavingCompanyName   = false
     @State private var companyNameError: String? = nil
+    /// Phase 8 / Multi-Company / Track 3 — controls the company
+    /// switcher sheet presentation. Sheet itself lives in
+    /// MultiCompany.swift and reads `store.companyMemberships`.
+    @State private var showCompanySwitcher    = false
     // Settings save (toolbar button)
     @State private var isSavingSettings      = false
     @State private var settingsSaveError: String? = nil
@@ -891,6 +895,16 @@ struct SettingsView: View {
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
+                        // Phase 8 / Multi-Company / Track 3 — surface the
+                        // company switcher. Single-membership users still
+                        // see the row (confirms which tenant they're in);
+                        // the sheet's footer explains that switching
+                        // unlocks once multiple memberships exist.
+                        Button {
+                            showCompanySwitcher = true
+                        } label: {
+                            Label("Switch Company", systemImage: "rectangle.2.swap")
+                        }
                     }
                 }
 
@@ -1034,6 +1048,11 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showInviteSheet) {
                 InviteCodeGeneratorView()
+            }
+            // Phase 8 / Multi-Company / Track 3 — switcher.
+            .sheet(isPresented: $showCompanySwitcher) {
+                CompanySwitcherSheet()
+                    .environmentObject(store)
             }
             .sheet(isPresented: $showImportSheet) {
                 MultiTabImportView()

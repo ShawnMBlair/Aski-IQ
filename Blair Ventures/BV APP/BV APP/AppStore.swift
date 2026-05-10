@@ -137,6 +137,13 @@ final class AppStore: ObservableObject {
     @Published var isOfflineMode: Bool       = false
     @Published var isAuthenticated: Bool     = false
 
+    /// Phase 8 / Multi-Company / Track 3 — list of companies the
+    /// signed-in user can access. Empty until
+    /// `pullCompanyMemberships()` runs (lazy on first switcher open
+    /// + after every successful login). For single-membership users
+    /// this is a 1-element list; multi-tenant users see N.
+    @Published var companyMemberships: [CompanyMembership] = []
+
     /// Set by NotificationTapDelegate when the user taps a notification.
     /// RootView observes this and switches tabs to the appropriate destination,
     /// then resets it to nil. Consumers should always reset after handling.
