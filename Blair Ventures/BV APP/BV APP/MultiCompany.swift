@@ -3,21 +3,22 @@
 //
 // v1 scope: surface the list of companies the signed-in user has
 // access to and let them switch between them without re-authenticating.
-// Save pending writes, swap `currentCompanyID`, re-attach local
-// persistence, and trigger a full re-pull. UI lives in the
-// `CompanySwitcherSheet` below, surfaced from AppSettings.
+// Save pending writes, call server-side `set_active_company()` RPC,
+// swap `currentCompanyID`, re-attach local persistence, and trigger a
+// full re-pull. UI lives in the `CompanySwitcherSheet` below,
+// surfaced from AppSettings.
 //
-// Server dependency (not in this slice):
-//   Real multi-company support requires either (a) a
-//   `company_memberships` table mapping each user to N companies, or
-//   (b) RLS on `companies` that allows a user to see every company
-//   they belong to. Aski IQ today scopes most users to a single
-//   company via `get_my_company_id()` — for those users the pull
-//   returns 1 row and the switcher is a no-op. The UI is built so
-//   that when the server-side membership model is added, no further
-//   iOS changes are needed.
+// Server-side enablement (shipped 2026-05-10):
+//   - `company_memberships` table maps users → N companies.
+//   - `current_user_company_ids()` returns the active set.
+//   - `companies` RLS relaxed to `id IN (SELECT current_user_company_ids())`.
+//   - `set_active_company(uuid)` RPC verifies membership and swaps
+//     `profiles.company_id` so `get_my_company_id()` returns the new
+//     tenant for all subsequent RLS evaluations.
+//   - See migrations/phase8_multi_company/ for the SQL.
 
 import SwiftUI
+import Supabase
 
 // MARK: - Membership Model
 
@@ -90,46 +91,77 @@ extension AppStore {
     /// Steps:
     ///   1. Flush pending writes for the OUTGOING tenant so they aren't
     ///      lost or merged into the wrong tenant's data.
-    ///   2. Clear in-memory @Published arrays so the UI doesn't briefly
+    ///   2. Call the server-side `set_active_company(uuid)` RPC so
+    ///      `get_my_company_id()` returns the new tenant for all
+    ///      subsequent RLS evaluations. Without this every pull would
+    ///      still filter against the OLD tenant's RLS view.
+    ///   3. Clear in-memory @Published arrays so the UI doesn't briefly
     ///      show outgoing-tenant data after the swap.
-    ///   3. Update `currentCompanyID`.
-    ///   4. Re-attach `LocalPendingStore` to the new tenant directory.
-    ///   5. Kick a full pull. `pullAll()` will repopulate every
+    ///   4. Update `currentCompanyID` locally.
+    ///   5. Re-attach `LocalPendingStore` to the new tenant directory.
+    ///   6. Kick a full pull. `pullAll()` will repopulate every
     ///      @Published array for the new tenant.
     ///
     /// While the pull is in flight `isSyncing` is true and the UI can
     /// show its standard loading state; once it returns the user lands
-    /// in the new company's home tab.
+    /// in the new company's home tab. Returns `false` (with an error
+    /// toast) if the server refused the swap — e.g., the user has no
+    /// active membership for the requested company.
     @MainActor
-    func switchToCompany(_ companyID: UUID) async {
-        guard companyID != currentCompanyID else { return }
+    @discardableResult
+    func switchToCompany(_ companyID: UUID) async -> Bool {
+        guard companyID != currentCompanyID else { return true }
 
         // Step 1: persist outgoing-tenant pending writes BEFORE we
         // swap the tenant ID. Otherwise the buffered writes would
         // land in the new tenant's directory.
         saveToDiskImmediately()
 
-        // Step 2: wipe in-memory caches. The pull replaces them with
+        // Step 2: server-side swap. set_active_company() verifies the
+        // caller has an active membership for the target tenant,
+        // updates profiles.company_id atomically, and returns a bool.
+        // Bail out without touching local state if the server refuses
+        // — better to leave the user in the old tenant than to wipe
+        // their cache and then strand them on an empty new one.
+        do {
+            struct Params: Encodable { let p_company_id: String }
+            let accepted: Bool = try await supabase
+                .rpc("set_active_company",
+                     params: Params(p_company_id: companyID.uuidString))
+                .execute()
+                .value
+            guard accepted else {
+                ToastService.shared.error("You don't have access to that company.")
+                return false
+            }
+        } catch {
+            ToastService.shared.error("Couldn't switch companies — \(error.localizedDescription)")
+            return false
+        }
+
+        // Step 3: wipe in-memory caches. The pull replaces them with
         // the new tenant's rows; until then the UI shows empty lists
         // (better than showing stale outgoing-tenant data).
         wipeInMemoryDataForCompanySwitch()
 
-        // Step 3: swap the tenant ID.
+        // Step 4: swap the tenant ID locally.
         self.currentCompanyID = companyID
 
-        // Step 4: re-attach local persistence + replay any pending
+        // Step 5: re-attach local persistence + replay any pending
         // writes the new tenant had buffered from a prior session.
         bindLocalPersistence(companyID: companyID)
 
-        // Step 5: re-pull everything for the new tenant. The pullAll
+        // Step 6: re-pull everything for the new tenant. The pullAll
         // call here runs against the new currentCompanyID since every
-        // pull filter reads that field at the top of the function.
-        guard let userID = currentUser?.id else { return }
+        // pull filter reads that field at the top of the function,
+        // and server-side RLS now matches via set_active_company.
+        guard let userID = currentUser?.id else { return true }
         await SyncEngine.shared.pullAll(for: userID, role: currentUserRole)
 
         // Refresh the membership flags so the switcher shows the new
         // active row when the user opens it next.
         await pullCompanyMemberships()
+        return true
     }
 
     /// Wipes all in-memory tenant-scoped data so the UI doesn't show
