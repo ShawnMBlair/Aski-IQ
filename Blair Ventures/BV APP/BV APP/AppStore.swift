@@ -54,6 +54,12 @@ final class AppStore: ObservableObject {
     @Published var clientPricings:       [ClientPricing]      = []
     @Published var importBatches:        [ImportBatch]        = []
 
+    // Phase 8 / Inventory v1 — see InventoryModels.swift + InventoryStore.swift
+    @Published var inventoryItems:        [InventoryItem]       = []
+    @Published var stockLocations:        [StockLocation]       = []
+    @Published var inventoryStockLevels:  [InventoryStockLevel] = []
+    @Published var inventoryTransfers:    [InventoryTransfer]   = []
+
     /// Per-record sync error metadata. Populated by sync push catch
     /// blocks via `recordSyncError(id:error:)`; cleared on successful
     /// retry / discard. In-memory only — failed records reattempt on

@@ -145,6 +145,11 @@ enum SupabaseTable {
     // Material Request workflow (SupabaseMigration_MaterialRequestWorkflow.sql)
     static let workflowSettings   = "workflow_settings"
     static let materialRequestAudit = "material_request_audit"
+    // Phase 8 / Inventory v1
+    static let inventoryItems        = "inventory_items"
+    static let stockLocations        = "stock_locations"
+    static let inventoryStockLevels  = "inventory_stock_levels"
+    static let inventoryTransfers    = "inventory_transfers"
 }
 
 // MARK: - App User Profile
