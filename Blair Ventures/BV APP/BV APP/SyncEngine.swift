@@ -2670,7 +2670,9 @@ final class SyncEngine: ObservableObject {
 
     // MARK: - Daily Job Reports Sync
 
-    private func pullDJRs(userID: UUID, role: UserRole) async {
+    // Internal (was private) so the BV APP Tests target can drive
+    // pullDJRs with a FakeSyncClient via @testable import.
+    func pullDJRs(userID: UUID, role: UserRole) async {
         guard !role.isExternal, let companyID = store.currentCompanyID else { return }
         do {
             struct DJRRow: Codable {
@@ -2680,12 +2682,18 @@ final class SyncEngine: ObservableObject {
                 let report_number: String?
                 let company_id: String?
             }
-            let rows: [DJRRow] = try await supabase
-                .from(SupabaseTable.dailyJobReports)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .execute().value
+            // Phase 5 / Wave 2 (slice 4): migrated to AskiSyncClient seam.
+            // The fake client returns whatever the test seeded into
+            // cannedSelect[table]; the live client delegates to the same
+            // supabase chain.
+            let rows: [DJRRow] = try await client.select(
+                DJRRow.self,
+                from: SupabaseTable.dailyJobReports,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ]
+            )
 
             for row in rows {
                 guard let uuid = UUID(uuidString: row.id),

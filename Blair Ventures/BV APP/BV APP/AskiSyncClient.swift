@@ -59,14 +59,30 @@ protocol AskiSyncClient: Sendable {
     /// concerns don't apply.
     func upsert<T: Encodable>(_ payload: T, into table: String) async throws
 
-    /// Select rows from a table with optional filters, decoding into T.
-    /// Equivalent to:
-    ///   supabase.from(table).select().eq(...).eq(...).execute().value
+    /// Select rows from a table with optional filters + ordering, decoding
+    /// into T. Equivalent to:
+    ///   supabase.from(table).select().eq(...).eq(...).order(orderBy)
+    ///     .execute().value
+    /// Pass `orderBy = nil` for unordered queries.
+    func select<T: Decodable>(
+        _ type: T.Type,
+        from table: String,
+        filters: [SyncFilter],
+        orderBy: String?,
+        ascending: Bool
+    ) async throws -> [T]
+}
+
+extension AskiSyncClient {
+    /// Convenience overload for the most common case — filters only,
+    /// no explicit ordering.
     func select<T: Decodable>(
         _ type: T.Type,
         from table: String,
         filters: [SyncFilter]
-    ) async throws -> [T]
+    ) async throws -> [T] {
+        try await select(type, from: table, filters: filters, orderBy: nil, ascending: true)
+    }
 }
 
 // MARK: - Filter shape
@@ -114,7 +130,9 @@ struct LiveSyncClient: AskiSyncClient {
     func select<T: Decodable>(
         _ type: T.Type,
         from table: String,
-        filters: [SyncFilter]
+        filters: [SyncFilter],
+        orderBy: String?,
+        ascending: Bool
     ) async throws -> [T] {
         var query = client.from(table).select()
         for filter in filters {
@@ -122,6 +140,9 @@ struct LiveSyncClient: AskiSyncClient {
             case .eq:  query = query.eq(filter.column, value: filter.value)
             case .neq: query = query.neq(filter.column, value: filter.value)
             }
+        }
+        if let orderBy {
+            return try await query.order(orderBy, ascending: ascending).execute().value
         }
         return try await query.execute().value
     }

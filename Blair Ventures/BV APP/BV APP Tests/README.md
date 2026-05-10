@@ -38,11 +38,18 @@ Wave 2 introduced `AskiSyncClient`, a narrow intent-shaped data-client protocol 
 3. Add a `SyncEngine<X>PushTests.swift` modeled after `SyncEngineDJRPushTests` — assert routing, payload shape, syncStatus transitions, error path.
 
 **Migration recipe** (per pull function):
-1. Replace `try await supabase.from(table).select().eq(...).execute().value` with `try await client.select(RowType.self, from: table, filters: [.eq("company_id", id), ...])`.
+1. Replace `try await supabase.from(table).select().eq(...).execute().value` with:
+   - No ordering: `try await client.select(RowType.self, from: table, filters: [.eq("company_id", id), .eq("is_deleted", false)])`
+   - With ordering: `try await client.select(RowType.self, from: table, filters: [...], orderBy: "name", ascending: true)`
 2. Drop `private`.
-3. Add a `SyncEngine<X>PullTests.swift` that pre-seeds `fake.cannedSelect[table] = [stubbedRow]` and asserts on `store.<X>` after the call.
+3. Extend the existing `SyncEngine<X>PushTests.swift` (or add a `…PullTests.swift`) with cases that pre-seed `fake.cannedSelect[table] = [stubbedRow]` and assert on `store.<X>` after the call.
 
-Migrating all ~30 push/pull functions can be incremental — production behavior is byte-identical at every step.
+`pullDJRs` (slice 4) is the migrated reference — see `SyncEngineDJRPushTests.test_pullDJRs_issuesCorrectSelectQuery` and `…_skipsExternalRoles` for the assertion shape.
+
+**Migration scope status (commits b260caa → 8bd349c → 1c6f540 + slice 4):**
+- ✅ Push: all 31 single-row upserts on `SyncEngine` migrated (slices 1–3)
+- 🔄 Pull: 1 of ~25 migrated (`pullDJRs`); rest are mechanical with the orderBy overload
+- ⬜ Multi-row pushes (e.g. `upsertBatch` for line items) — not yet on the protocol; add when first call site needs them
 
 ## Still deferred (Wave 3+)
 

@@ -1,19 +1,19 @@
 // SyncEngineDJRPushTests.swift
-// Aski IQ — Phase 5 / Wave 2 first SyncEngine push test.
+// Aski IQ — Phase 5 / Wave 2 SyncEngine DJR push + pull tests.
 //
-// Validates that pushPendingDJRs:
+// Validates pushPendingDJRs (slice 1):
 //   1. Routes to the daily_job_reports table (DJR1 schema closure).
 //   2. Includes report_number in the upsert payload (regression
 //      guard for the SCHEMA GAP that pre-Phase-3 left it omitted).
 //   3. Marks the row syncStatus=.synced after a successful push.
-//   4. Includes only the standard fields the table accepts (id,
-//      company_id, project_id, report_date, prepared_by,
-//      work_summary, report_number, is_deleted, deleted_by; plus
-//      deleted_at when set).
+//
+// Validates pullDJRs (slice 4):
+//   4. Issues the right select query (table + filters).
+//   5. Decodes returned rows into AppStore.
 //
 // Pattern: construct an isolated SyncEngine via init(client:) with a
 // FakeSyncClient. Pre-seed AppStore with a pending DJR. Drive the
-// push. Assert on FakeSyncClient.upserts + AppStore state.
+// push or pull. Assert on FakeSyncClient.upserts/selects + AppStore state.
 
 import XCTest
 import Supabase
@@ -142,6 +142,45 @@ final class SyncEngineDJRPushTests: XCTestCase {
                           "Expected DJR to be marked .failed when push throws")
             XCTAssertNotNil(store.syncErrors[djr.id],
                           "Expected SyncErrorMapper to record the error for the row")
+        }
+    }
+
+    // MARK: - pullDJRs (Phase 5 / Wave 2 slice 4 first pull test)
+
+    @MainActor
+    func test_pullDJRs_issuesCorrectSelectQuery() async throws {
+        try await withFreshStore { store in
+            let fake = FakeSyncClient()
+            let engine = SyncEngine(client: fake)
+            let companyID = try XCTUnwrap(store.currentCompanyID)
+
+            await engine.pullDJRs(userID: UUID(), role: .owner)
+
+            // Should issue a single select on daily_job_reports filtered
+            // by the current company + is_deleted=false (the standard
+            // tenant + soft-delete predicate every pull uses).
+            XCTAssertEqual(fake.selects.count, 1)
+            let call = try XCTUnwrap(fake.selects.first)
+            XCTAssertEqual(call.table, "daily_job_reports")
+            XCTAssertTrue(call.filters.contains(.eq("company_id", companyID.uuidString)),
+                          "Expected company_id filter; got \(call.filters)")
+            XCTAssertTrue(call.filters.contains(.eq("is_deleted", false)),
+                          "Expected is_deleted=false filter; got \(call.filters)")
+        }
+    }
+
+    @MainActor
+    func test_pullDJRs_skipsExternalRoles() async throws {
+        try await withFreshStore { store in
+            let fake = FakeSyncClient()
+            let engine = SyncEngine(client: fake)
+
+            // External roles (.client, etc.) should not pull — DJR is
+            // an internal artifact. Defense-in-depth on top of RLS.
+            await engine.pullDJRs(userID: UUID(), role: .client)
+
+            XCTAssertEqual(fake.selects.count, 0,
+                          "External roles should not issue a DJR pull query")
         }
     }
 }
