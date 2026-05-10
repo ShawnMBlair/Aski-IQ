@@ -9,6 +9,13 @@ struct ProjectCreateEditView: View {
     @Environment(\.dismiss) var dismiss
 
     var existing: Project? = nil
+    /// Phase 7 / Decision 1 — opportunity ID prefilled when the view
+    /// is launched from the auto-route picker. New projects stamp this
+    /// onto `project.opportunityID` so the FK chain
+    /// (opportunity → project → invoices/COs/RFIs) is established at
+    /// create time rather than via a later auto-link trigger. Edit
+    /// paths leave it nil and the value falls back to the existing row.
+    var preselectedOpportunityID: UUID? = nil
 
     // Relationship pickers
     @State private var selectedClientID:    UUID? = nil
@@ -303,6 +310,17 @@ struct ProjectCreateEditView: View {
     // MARK: - Populate
 
     private func populate() {
+        // Phase 7 / Decision 1 — pre-fill the client picker from the
+        // preselected opportunity's client when this view is launched
+        // from the auto-route picker. Saves the user a second pick
+        // since opportunity → client is already a 1:1 relationship.
+        if existing == nil, let oppID = preselectedOpportunityID,
+           let opp = store.crmOpportunities.first(where: { $0.id == oppID }) {
+            selectedClientID = opp.clientID
+            if let c = store.client(id: opp.clientID) {
+                clientName = c.name
+            }
+        }
         guard let p = existing else { return }
         name                  = p.name
         clientName            = p.clientName
@@ -410,6 +428,12 @@ struct ProjectCreateEditView: View {
         project.updatedAt        = Date()
         project.lastModifiedAt   = Date()
         project.syncStatus       = .pending
+        // Phase 7 / Decision 1 — stamp the source opportunity for new
+        // projects. Existing projects keep whatever opportunity_id
+        // they already had (the picker only routes new creates).
+        if existing == nil, let oppID = preselectedOpportunityID {
+            project.opportunityID = oppID
+        }
 
         // Phase-2 deferred audit fix: only check for conflicts when
         // editing an existing project. Brand-new creates can't

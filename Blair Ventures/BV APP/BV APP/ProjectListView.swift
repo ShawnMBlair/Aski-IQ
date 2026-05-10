@@ -3,11 +3,22 @@
 
 import SwiftUI
 
+private enum ProjectCreateFlow: Identifiable {
+    case pickParent
+    case create(UUID)
+    var id: String {
+        switch self {
+        case .pickParent:        return "pickParent"
+        case .create(let oppID): return "create-\(oppID.uuidString)"
+        }
+    }
+}
+
 struct ProjectListView: View {
     @EnvironmentObject var store: AppStore
     @State private var searchText = ""
     @State private var selectedFilter: ProjectStatus? = nil
-    @State private var showCreateProject = false
+    @State private var flow: ProjectCreateFlow? = nil
     @StateObject private var pagination = PaginationState(pageSize: 20)
 
     private var filteredProjects: [Project] {
@@ -85,16 +96,33 @@ struct ProjectListView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button {
-                        showCreateProject = true
+                        flow = .pickParent
                     } label: {
                         Image(systemName: "plus")
                     }
                     .accessibilityLabel("Add project")
-                    .accessibilityHint("Opens the new project form")
+                    .accessibilityHint("Opens the opportunity picker before the new project form")
                 }
             }
-            .sheet(isPresented: $showCreateProject) {
-                ProjectCreateEditView()
+            // Phase 7 / Decision 1: route Project create through an
+            // Opportunity picker. Per the entity-first pattern, every
+            // project should originate from a CRM opportunity. Pre-fix
+            // the `+` opened ProjectCreateEditView with no
+            // opportunity_id; even though the schema lets that pass
+            // (nullable on iOS, NOT NULL on prod via a later auto-link
+            // trigger), the trigger fallback is for legacy data and
+            // shouldn't be the normal happy path.
+            .sheet(item: $flow) { state in
+                switch state {
+                case .pickParent:
+                    RequiredOpportunityPickerSheet { picked in
+                        flow = .create(picked)
+                    }
+                    .environmentObject(store)
+                case .create(let oppID):
+                    ProjectCreateEditView(preselectedOpportunityID: oppID)
+                        .environmentObject(store)
+                }
             }
         }
     }

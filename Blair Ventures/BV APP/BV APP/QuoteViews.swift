@@ -518,9 +518,20 @@ extension AppStore {
 
 // MARK: - Quote List View
 
+private enum QuoteCreateFlow: Identifiable {
+    case pickEstimate
+    case create(Estimate)
+    var id: String {
+        switch self {
+        case .pickEstimate:     return "pickEstimate"
+        case .create(let est):  return "create-\(est.id.uuidString)"
+        }
+    }
+}
+
 struct QuoteListView: View {
     @EnvironmentObject var store: AppStore
-    @State private var showCreate = false
+    @State private var flow: QuoteCreateFlow? = nil
     @State private var searchText = ""
 
     /// Slice 6 stabilization (Bug C): reverted the "smart router" that
@@ -574,7 +585,7 @@ struct QuoteListView: View {
                                 .foregroundColor(.secondary)
                                 .multilineTextAlignment(.center)
                                 .padding(.horizontal)
-                            Button("New Quote") { showCreate = true }
+                            Button("New Quote") { flow = .pickEstimate }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(!store.hasCompletedFirstSync)
                             Spacer()
@@ -598,14 +609,30 @@ struct QuoteListView: View {
             .navigationTitle("Quotes")
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button { showCreate = true } label: {
+                    Button { flow = .pickEstimate } label: {
                         Image(systemName: "plus")
                     }
                     .disabled(!store.hasCompletedFirstSync)
                 }
             }
-            .sheet(isPresented: $showCreate) {
-                QuoteCreateView()
+            // Phase 7 / Decision 1: route Quote create through an
+            // Estimate picker. `Quote.estimateID` is a NOT NULL FK, so
+            // creating a quote without first picking an estimate would
+            // always fail on push. Pre-fix the user could open
+            // QuoteCreateView() with no estimate selected, fill out
+            // line items, then hit an unfixable "no estimate selected"
+            // validation error at save.
+            .sheet(item: $flow) { state in
+                switch state {
+                case .pickEstimate:
+                    RequiredEstimatePickerSheet { picked in
+                        flow = .create(picked)
+                    }
+                    .environmentObject(store)
+                case .create(let est):
+                    QuoteCreateView(fromEstimate: est)
+                        .environmentObject(store)
+                }
             }
         }
     }

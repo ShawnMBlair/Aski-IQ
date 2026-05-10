@@ -353,6 +353,125 @@ struct RequiredEstimatePickerSheet: View {
     }
 }
 
+// MARK: - Subcontractor Picker
+//
+// Used by `ProjectSubContractListView` to enforce vendor selection
+// before opening the Sub-Contract create form. Pre-fix the list's
+// `+` opened `SubContractCreateEditView(subcontractorID: UUID())`
+// with a placeholder vendor ID — saving would either fail at the
+// vendor FK or silently associate the contract with a non-existent
+// row.
+
+struct RequiredSubcontractorPickerSheet: View {
+    @EnvironmentObject var store: AppStore
+    @Environment(\.dismiss) var dismiss
+
+    let onPick: (UUID) -> Void
+
+    @State private var search = ""
+
+    private var eligibleSubcontractors: [Subcontractor] {
+        store.subcontractors
+            .filter { $0.status == .active }
+            .sorted { $0.companyName < $1.companyName }
+    }
+
+    private var filtered: [Subcontractor] {
+        guard !search.isEmpty else { return eligibleSubcontractors }
+        return eligibleSubcontractors.filter {
+            $0.companyName.localizedCaseInsensitiveContains(search) ||
+            ($0.trade?.localizedCaseInsensitiveContains(search) == true)
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if eligibleSubcontractors.isEmpty {
+                    emptyState
+                } else {
+                    listContent
+                }
+            }
+            .navigationTitle("Select Subcontractor")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private var listContent: some View {
+        List {
+            Section {
+                ForEach(filtered) { sub in
+                    Button {
+                        onPick(sub.id)
+                    } label: {
+                        SubcontractorPickerRow(subcontractor: sub)
+                    }
+                    .buttonStyle(.plain)
+                }
+            } header: {
+                Text("Active Subcontractors (\(filtered.count))")
+            }
+        }
+        .listStyle(.insetGrouped)
+        .searchable(text: $search, prompt: "Vendor or trade")
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "person.2.badge.gearshape")
+                .font(.system(size: 48))
+                .foregroundColor(.secondary)
+            Text("No active subcontractors")
+                .font(.headline)
+            Text("Add a subcontractor record before creating a sub-contract.")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct SubcontractorPickerRow: View {
+    let subcontractor: Subcontractor
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.purple.opacity(0.12))
+                    .frame(width: 36, height: 36)
+                Image(systemName: "wrench.and.screwdriver.fill")
+                    .foregroundColor(.purple)
+                    .font(.system(size: 14))
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(subcontractor.companyName)
+                    .font(.subheadline).bold()
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+                if let trade = subcontractor.trade, !trade.isEmpty {
+                    Text(trade)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
 private struct EstimatePickerRowView: View {
     let estimate: Estimate
 

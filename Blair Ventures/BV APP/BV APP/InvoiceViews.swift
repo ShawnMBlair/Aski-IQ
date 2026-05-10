@@ -5,11 +5,22 @@ import SwiftUI
 
 // MARK: - Invoice List View
 
+private enum InvoiceCreateFlow: Identifiable {
+    case pickParent
+    case create(UUID)
+    var id: String {
+        switch self {
+        case .pickParent:      return "pickParent"
+        case .create(let id):  return "create-\(id.uuidString)"
+        }
+    }
+}
+
 struct InvoiceListView: View {
     @EnvironmentObject var store: AppStore
     @State private var searchText: String = ""
     @State private var selectedStatus: InvoiceStatus? = nil
-    @State private var showCreate = false
+    @State private var flow: InvoiceCreateFlow? = nil
     @State private var showAging  = false
     @StateObject private var pagination = PaginationState(pageSize: 25)
 
@@ -42,12 +53,27 @@ struct InvoiceListView: View {
                         Button { showAging = true } label: {
                             Image(systemName: "chart.bar.doc.horizontal")
                         }
-                        Button { showCreate = true } label: { Image(systemName: "plus") }
+                        Button { flow = .pickParent } label: { Image(systemName: "plus") }
                             .disabled(!store.hasCompletedFirstSync)
                     }
                 }
-                .sheet(isPresented: $showCreate) {
-                    InvoiceCreateEditView(invoice: nil)
+                // Phase 7 / Decision 1: route the toolbar `+` through a
+                // project picker. Pre-fix the create sheet opened with
+                // no parent, letting the user save an invoice with
+                // `project_id = nil` — legal at the DB level (nullable),
+                // but the audit identified it as an orphan-record source
+                // for reporting roll-ups that filter by project.
+                .sheet(item: $flow) { state in
+                    switch state {
+                    case .pickParent:
+                        RequiredProjectPickerSheet { picked in
+                            flow = .create(picked)
+                        }
+                        .environmentObject(store)
+                    case .create(let pid):
+                        InvoiceCreateEditView(invoice: nil, preselectedProjectID: pid)
+                            .environmentObject(store)
+                    }
                 }
                 .sheet(isPresented: $showAging) {
                     InvoiceAgingReportView().environmentObject(store)
@@ -856,14 +882,20 @@ struct InvoiceCreateEditView: View {
     @State private var showConflictAlert = false
     @State private var pendingLocalInvoice: Invoice? = nil
 
-    init(invoice: Invoice?) {
+    /// Phase 7 / Decision 1 — preselected project ID when the view is
+    /// launched from the auto-route picker. Existing edit / from-quote
+    /// paths leave it nil and the value falls back to `invoice.projectID`.
+    init(invoice: Invoice?, preselectedProjectID: UUID? = nil) {
         self.invoice = invoice
         let inv = invoice
         _invoiceNumber   = State(initialValue: inv?.invoiceNumber ?? "")
         _invoiceDate     = State(initialValue: inv?.invoiceDate ?? Date())
         _dueDate         = State(initialValue: inv?.dueDate ?? Calendar.current.date(byAdding: .day, value: 30, to: Date())!)
         _status          = State(initialValue: inv?.status ?? .draft)
-        _selectedProjectID = State(initialValue: inv?.projectID)
+        // Preselected project (from picker) wins over an existing
+        // invoice's project ID only for new invoices — edits keep
+        // whatever the row already had.
+        _selectedProjectID = State(initialValue: inv?.projectID ?? preselectedProjectID)
         _selectedClientID  = State(initialValue: inv?.clientID)
         _billToName      = State(initialValue: inv?.billToName ?? "")
         _billToAddress   = State(initialValue: inv?.billToAddress ?? "")
