@@ -164,4 +164,144 @@ extension AppStore {
         objectWillChange.send()
         Task { await SyncEngine.shared.pushPendingWorkflowSettings(updated) }
     }
+
+    // MARK: - Phase 6 / Wave 2: Generalized canPerform(action:amount:) API
+    //
+    // Public API for any gated action across the app. New gating call-sites
+    // should use this helper instead of hardcoded role lists or
+    // domain-specific helpers (`canApproveMaterialRequest`, etc.). The
+    // existing helpers continue to exist and continue to delegate
+    // through their original logic — this is a non-breaking shim.
+    //
+    // Implementation today: per-action switch that calls into the
+    // existing helpers / role checks. Behavior is identical to pre-Phase-6.
+    //
+    // Implementation in Wave 3 (after WS1 migration lands on prod and
+    // the Swift WorkflowSetting struct gains an `actionKey` field): the
+    // switch is replaced with a `workflowSettings.first(where:)` lookup
+    // by (companyID, role, actionKey). Admins can then rebalance any
+    // action's role assignments + amount limits via the Workflow
+    // Settings admin UI without code changes — same model procurement
+    // already enjoys, extended to every other module.
+
+    /// Generalized capability check. The single public API every gating
+    /// call-site should adopt. Returns true if the current user can
+    /// perform the given action; for amount-gated actions, also enforces
+    /// the per-role amount limit.
+    ///
+    /// - Parameter action: The ActionKey identifying the gated operation.
+    /// - Parameter amount: For amount-gated actions (approve / void /
+    ///   etc.), the dollar amount being decided. Pass nil for binary
+    ///   allow/deny actions.
+    /// - Returns: true if the action is permitted; false otherwise.
+    func canPerform(action: ActionKey, amount: Decimal? = nil) -> Bool {
+        let role = currentUserRole
+        switch action {
+
+        // MARK: Material Requests — already on workflow_settings
+        case .materialRequestCreate:
+            return canCreateMaterialRequest
+        case .materialRequestApprove:
+            return canApproveMaterialRequest(amount: amount ?? 0)
+        case .materialRequestSendToSupplier:
+            return canSendToSupplier
+        case .materialRequestReceive:
+            return canReceiveMaterials
+
+        // MARK: Purchase Orders — same role gates as MR for now
+        case .purchaseOrderCreate:
+            return [.projectManager, .officeAdmin, .manager, .executive, .owner].contains(role)
+        case .purchaseOrderSend:
+            return canSendToSupplier
+        case .purchaseOrderReceive:
+            return canReceiveMaterials
+        case .purchaseOrderMatchInvoice:
+            return [.officeAdmin, .manager, .executive, .owner].contains(role)
+
+        // MARK: Quotes — delegate to existing ApprovalAuthority helpers
+        // where they exist; otherwise straight role-list check.
+        case .quoteApprove:
+            return ApprovalAuthority.canApproveQuoteApproval(
+                for: role, quoteTotal: amount ?? 0
+            ) != .blocked
+        case .quoteSend:
+            return [.estimator, .projectManager, .officeAdmin, .manager, .executive, .owner].contains(role)
+        case .quoteMarkAccepted, .quoteDecline:
+            return [.projectManager, .officeAdmin, .manager, .executive, .owner].contains(role)
+
+        // MARK: Estimates
+        case .estimateReview:
+            return [.projectManager, .officeAdmin, .manager, .executive, .owner].contains(role)
+        case .estimateApprove:
+            return [.officeAdmin, .manager, .executive, .owner].contains(role)
+
+        // MARK: Invoices
+        case .invoiceSend:
+            return [.officeAdmin, .manager, .executive, .owner].contains(role)
+        case .invoiceVoid:
+            return [.manager, .executive, .owner].contains(role)
+        case .invoiceRecordPayment:
+            return [.officeAdmin, .manager, .executive, .owner].contains(role)
+
+        // MARK: Change Orders
+        case .changeOrderApprove:
+            return role.canApproveChangeOrder
+        case .changeOrderReject:
+            return role.canApproveChangeOrder
+
+        // MARK: Schedule
+        case .scheduleEdit:
+            return [.foreman, .projectManager, .officeAdmin, .manager, .executive, .owner].contains(role)
+        case .scheduleOverrideConflict:
+            // No project-wide canOverrideConflict helper today; the
+            // SchedulingCommandCentreView uses an inline role check
+            // (canOverrideHighRisk = manager+). Mirroring it here so
+            // future call-sites get the same gate.
+            return [.projectManager, .manager, .executive, .owner].contains(role)
+        case .scheduleApproveRecommendation:
+            return canApproveScheduleRecommendation
+
+        // MARK: Timesheets
+        case .timesheetApprove:
+            return role.canApproveTimesheets
+        case .timesheetEditSubmitted:
+            return [.officeAdmin, .manager, .executive, .owner].contains(role)
+
+        // MARK: RFIs
+        case .rfiAnswer:
+            return [.projectManager, .officeAdmin, .manager, .executive, .owner].contains(role)
+        case .rfiClose:
+            return [.projectManager, .officeAdmin, .manager, .executive, .owner].contains(role)
+
+        // MARK: Contracts
+        case .contractApprove:
+            return [.officeAdmin, .manager, .executive, .owner].contains(role)
+        case .contractTerminate:
+            return [.manager, .executive, .owner].contains(role)
+        case .subContractApprove:
+            return [.officeAdmin, .manager, .executive, .owner].contains(role)
+
+        // MARK: Material Sales
+        case .materialSaleApprove:
+            return [.officeAdmin, .manager, .executive, .owner].contains(role)
+        case .materialSaleVoid:
+            return [.manager, .executive, .owner].contains(role)
+        }
+    }
+
+    /// Convenience for amount-gated actions where 0 means "no amount
+    /// applicable" (e.g. you want to know whether the role CAN approve
+    /// at all, regardless of tier). Equivalent to canPerform with amount = 0.
+    func canPerform(action: ActionKey) -> Bool {
+        canPerform(action: action, amount: nil)
+    }
+
+    /// All action keys the current user is currently allowed to perform.
+    /// Drives the "My Approvals" admin views + Wave 3 inbox extension.
+    /// Note: amount-gated actions appear here only if the role can
+    /// perform them at ANY tier (passes the binary gate); the per-tier
+    /// amount check still happens at decision time.
+    var permittedActionKeys: [ActionKey] {
+        ActionKey.allCases.filter { canPerform(action: $0) }
+    }
 }
