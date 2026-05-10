@@ -17,9 +17,18 @@
 //
 //   The canPerform helper (in WorkflowSetting.swift) currently delegates
 //   to the existing per-domain helpers (canApproveMaterialRequest,
-//   canSendToSupplier, etc.) so behavior is identical to today. Wave 3
-//   will swap the implementation to read from workflow_settings rows
-//   keyed by (company_id, role_key, action_key).
+//   canSendToSupplier, etc.) so behavior is identical to today. The
+//   Wave 4 swap will replace that delegation with a workflow_settings
+//   lookup keyed by (company_id, role_key, action_key) once WS1 lands
+//   on prod.
+//
+//   Wave 3 (shipped): all major view-layer gating call-sites now route
+//   through canPerform — Procurement (create / approve / send / receive),
+//   the Approval Queue (quote / CO / timesheet / schedule), the More-tab
+//   timesheet link, the DJR approve/reject button, and the Scheduling
+//   Command Centre. Remaining direct uses of the underlying helpers are
+//   intentional: the SyncEngine push/pull mappers (field IO) and the
+//   WorkflowSettingsAdminView (the source-of-truth editor itself).
 //
 //   The two-step migration (shim now, engine later) lets call-sites
 //   adopt the API immediately without waiting for WS1 to land on prod.
