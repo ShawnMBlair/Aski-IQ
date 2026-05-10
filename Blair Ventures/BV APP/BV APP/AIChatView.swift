@@ -15,15 +15,53 @@ struct ChatMessage: Identifiable, Equatable, Codable {
     enum Role: String, Codable { case user, assistant }
 }
 
+// MARK: - Chat Thread Model
+//
+// Phase 8 / AI v2 — multiple parallel conversations. Each thread holds
+// its own message list + metadata; AIChatService picks one as active
+// at any time. UI sidebar (`ThreadListSheet`) lets the user switch
+// between them. Same on-disk JSON blob holds all threads.
+
+struct ChatThread: Identifiable, Equatable, Codable {
+    var id: UUID = UUID()
+    var title: String                // auto-derived from first user message
+    var createdAt: Date = Date()
+    var updatedAt: Date = Date()
+    var messages: [ChatMessage] = []
+    var isArchived: Bool = false
+
+    /// Default title used when a thread is freshly created. The first
+    /// user message replaces this via `autoTitleIfNeeded()`.
+    static let defaultTitle = "New Chat"
+
+    /// Preview text shown in the thread list — last assistant or user
+    /// message, truncated. Empty threads show "(empty)".
+    var preview: String {
+        guard let last = messages.last else { return "(empty)" }
+        return String(last.content.prefix(80))
+    }
+}
+
 // MARK: - Chat Service
 
 @MainActor
 final class AIChatService: ObservableObject {
     static let shared = AIChatService()
 
-    @Published var messages: [ChatMessage] = [] {
-        didSet { persistMessages() }
-    }
+    /// All threads, newest-first. The active thread is the one whose
+    /// `id` matches `activeThreadID`; its messages are mirrored to
+    /// `messages` for direct view-layer binding.
+    @Published var threads: [ChatThread] = []
+    @Published var activeThreadID: UUID? = nil
+
+    /// Mirror of the active thread's messages. The send/stream path
+    /// mutates this array; `persistActiveThread()` writes it back to
+    /// `threads` and saves at safe points (after streaming completes,
+    /// on thread switch, on clear). Doing the writeback on every token
+    /// append would re-encode the entire threads blob hundreds of
+    /// times per response — wasteful and noisy.
+    @Published var messages: [ChatMessage] = []
+
     @Published var isLoading = false
     @Published var error: String? = nil
 
@@ -33,35 +71,192 @@ final class AIChatService: ObservableObject {
     /// first-token loading dots).
     @Published var isStreaming = false
 
-    /// UserDefaults key for persisted conversation. Per-user keying is
-    /// handled by the auth flow clearing this on sign-out (see
-    /// `clearForLogout()` below).
-    private static let storageKey = "aski_ai_chat_history_v1"
+    // MARK: Persistence keys
 
-    /// Cap on persisted messages so a long-running conversation doesn't
-    /// bloat the on-disk store. The chat itself can render as many as
-    /// the user generates in one session; only the persisted slice is
-    /// trimmed.
+    /// v2 threads blob — supersedes the v1 single-conversation key.
+    private static let threadsKey       = "aski_ai_chat_threads_v1"
+    private static let activeThreadKey  = "aski_ai_chat_active_thread_v1"
+    /// v1 legacy key — migrated into a single thread on first launch
+    /// of a build that has v2 threads. Cleared after migration so we
+    /// don't double-import on subsequent launches.
+    private static let legacyMessagesKey = "aski_ai_chat_history_v1"
+
+    /// Per-thread message cap. Same as v1 — long-running conversations
+    /// trim the oldest messages off the persisted copy. In-memory
+    /// history is unbounded during a session.
     private static let persistedHistoryCap = 200
 
+    /// Max threads we persist. Older / archived threads beyond this
+    /// limit are dropped during save. The user can manually delete
+    /// threads before then if storage feels stale.
+    private static let persistedThreadCap = 50
+
     private init() {
-        // Hydrate persisted history on first access. Failure is silent
-        // — a corrupt blob just means the user starts fresh, no error
-        // visible since chat already supports the empty state gracefully.
-        if let data = UserDefaults.standard.data(forKey: Self.storageKey),
-           let decoded = try? JSONDecoder().decode([ChatMessage].self, from: data) {
-            messages = decoded
+        loadThreadsFromDisk()
+    }
+
+    // MARK: Load / save
+
+    private func loadThreadsFromDisk() {
+        let defaults = UserDefaults.standard
+
+        // v2 path — threads blob exists.
+        if let data = defaults.data(forKey: Self.threadsKey),
+           let decoded = try? JSONDecoder().decode([ChatThread].self, from: data) {
+            threads = decoded
+            // Restore active selection. If the stored ID no longer
+            // resolves (deleted thread, corrupt data), fall back to
+            // the most recently updated one.
+            if let activeStr = defaults.string(forKey: Self.activeThreadKey),
+               let activeUUID = UUID(uuidString: activeStr),
+               threads.contains(where: { $0.id == activeUUID }) {
+                activeThreadID = activeUUID
+            } else {
+                activeThreadID = threads.first?.id
+            }
+            messages = threads.first(where: { $0.id == activeThreadID })?.messages ?? []
+            return
+        }
+
+        // v1 → v2 one-time migration: if the legacy single-conversation
+        // blob exists, fold it into one "Imported chat" thread and
+        // wipe the legacy key. Devices updating from a pre-threads
+        // build get their history preserved.
+        if let data = defaults.data(forKey: Self.legacyMessagesKey),
+           let legacyMessages = try? JSONDecoder().decode([ChatMessage].self, from: data),
+           !legacyMessages.isEmpty {
+            let migrated = ChatThread(
+                title:    autoTitle(from: legacyMessages) ?? "Imported chat",
+                messages: legacyMessages
+            )
+            threads = [migrated]
+            activeThreadID = migrated.id
+            messages = legacyMessages
+            persistThreads()
+            defaults.removeObject(forKey: Self.legacyMessagesKey)
+            return
+        }
+
+        // No history at all — start empty. The first send() creates
+        // the first thread on demand.
+        threads = []
+        activeThreadID = nil
+        messages = []
+    }
+
+    /// Writes the active thread's current `messages` back into the
+    /// `threads` array, then persists the full blob (trimmed). Called
+    /// at safe points; NOT on every token to avoid re-encoding the
+    /// whole list during streaming.
+    private func persistActiveThread() {
+        guard let aid = activeThreadID,
+              let idx = threads.firstIndex(where: { $0.id == aid }) else { return }
+        threads[idx].messages = Array(messages.suffix(Self.persistedHistoryCap))
+        threads[idx].updatedAt = Date()
+        autoTitleIfNeeded(at: idx)
+        persistThreads()
+    }
+
+    private func persistThreads() {
+        // Sort newest-first, cap, encode. Archived threads age out
+        // first when over the cap so the active set stays in the
+        // foreground.
+        threads.sort { lhs, rhs in
+            if lhs.isArchived != rhs.isArchived { return !lhs.isArchived && rhs.isArchived }
+            return lhs.updatedAt > rhs.updatedAt
+        }
+        let trimmed = Array(threads.prefix(Self.persistedThreadCap))
+        guard let data = try? JSONEncoder().encode(trimmed) else { return }
+        UserDefaults.standard.set(data, forKey: Self.threadsKey)
+        if let aid = activeThreadID {
+            UserDefaults.standard.set(aid.uuidString, forKey: Self.activeThreadKey)
         }
     }
 
-    private func persistMessages() {
-        let trimmed = messages.suffix(Self.persistedHistoryCap)
-        guard let data = try? JSONEncoder().encode(Array(trimmed)) else { return }
-        UserDefaults.standard.set(data, forKey: Self.storageKey)
+    // MARK: Thread CRUD
+
+    /// Creates a new thread and makes it active. The current thread's
+    /// messages are saved first.
+    @discardableResult
+    func newThread() -> ChatThread {
+        persistActiveThread()
+        let t = ChatThread(title: ChatThread.defaultTitle)
+        threads.insert(t, at: 0)
+        activeThreadID = t.id
+        messages = []
+        error = nil
+        persistThreads()
+        return t
+    }
+
+    /// Switches to an existing thread. The previous thread's messages
+    /// are saved before the swap.
+    func selectThread(_ id: UUID) {
+        guard id != activeThreadID else { return }
+        persistActiveThread()
+        activeThreadID = id
+        messages = threads.first(where: { $0.id == id })?.messages ?? []
+        error = nil
+        persistThreads()
+    }
+
+    /// Deletes a thread permanently. If it was active, switches to
+    /// the next available thread, or leaves the chat empty if none.
+    func deleteThread(_ id: UUID) {
+        threads.removeAll { $0.id == id }
+        if activeThreadID == id {
+            activeThreadID = threads.first?.id
+            messages = threads.first(where: { $0.id == activeThreadID })?.messages ?? []
+        }
+        persistThreads()
+    }
+
+    /// Toggles archive state. Archived threads still exist and can be
+    /// unarchived; they just sink to the bottom of the list.
+    func toggleArchive(_ id: UUID) {
+        guard let idx = threads.firstIndex(where: { $0.id == id }) else { return }
+        threads[idx].isArchived.toggle()
+        persistThreads()
+    }
+
+    // MARK: Auto-title
+
+    /// First user message becomes the thread title once it's clear
+    /// what the conversation is about. Caps at 40 chars; legacy
+    /// migration uses the same helper to derive a sensible title.
+    private static let autoTitleLimit = 40
+
+    private func autoTitleIfNeeded(at index: Int) {
+        guard threads[index].title == ChatThread.defaultTitle else { return }
+        if let derived = autoTitle(from: threads[index].messages) {
+            threads[index].title = derived
+        }
+    }
+
+    private func autoTitle(from messages: [ChatMessage]) -> String? {
+        guard let firstUser = messages.first(where: { $0.role == .user }) else { return nil }
+        let trimmed = firstUser.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.count <= Self.autoTitleLimit { return trimmed }
+        return String(trimmed.prefix(Self.autoTitleLimit)) + "…"
+    }
+
+    /// Ensures there's an active thread before the first message is
+    /// sent. Called from `send()` so the user doesn't have to tap
+    /// "new" explicitly on a cold launch.
+    private func ensureActiveThread() {
+        if activeThreadID == nil {
+            newThread()
+        }
     }
 
     func send(userText: String, context: String) async {
         guard !userText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        // Phase 8 / AI v2: ensure the user is in a thread before the
+        // first message lands. Cold launch with no threads triggers
+        // implicit creation here so the user can just start typing.
+        ensureActiveThread()
 
         messages.append(ChatMessage(role: .user, content: userText))
         isLoading = true
@@ -140,16 +335,25 @@ final class AIChatService: ObservableObject {
         isStreaming = false
         isLoading = false
 
+        // Save the active thread's mutated messages back to the
+        // threads array + disk now that streaming is done. Skipping
+        // the per-token persist saved a ~hundred re-encodes; doing
+        // it once at the end keeps the on-disk state durable.
+        persistActiveThread()
+
         // Suppress the placeholder warning — the optimistic ID isn't
         // used downstream, but Swift's unused-let lint will complain
         // without something referencing it.
         _ = placeholderID
     }
 
+    /// Clears the *active* thread's messages (not all threads). The
+    /// thread itself remains; only its conversation history is wiped.
+    /// To remove a thread entirely use `deleteThread(_:)`.
     func clearHistory() {
-        messages = []  // didSet persists the empty array
+        messages = []
         error = nil
-        UserDefaults.standard.removeObject(forKey: Self.storageKey)
+        persistActiveThread()
     }
 
     private func systemPrompt(context: String) -> String {
@@ -178,7 +382,18 @@ struct AIChatView: View {
     @Environment(\.dismiss) var dismiss
 
     @State private var inputText = ""
+    @State private var showThreadList = false
     @FocusState private var inputFocused: Bool
+
+    /// Active thread title for the navigation bar. Falls back to
+    /// "Aski AI" when there are no threads yet (cold launch).
+    private var activeThreadTitle: String {
+        guard let aid = service.activeThreadID,
+              let t = service.threads.first(where: { $0.id == aid }) else {
+            return "Aski AI"
+        }
+        return t.title
+    }
 
     var body: some View {
         NavigationStack {
@@ -228,13 +443,25 @@ struct AIChatView: View {
                 // Input bar
                 inputBar
             }
-            .navigationTitle("Aski AI")
+            .navigationTitle(activeThreadTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Done") { dismiss() }
+                    Button { dismiss() } label: { Text("Done") }
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    // Phase 8 / AI v2 — thread management.
+                    // Threads sheet: switch between parallel conversations.
+                    Button { showThreadList = true } label: {
+                        Image(systemName: "bubble.left.and.bubble.right")
+                    }
+                    // New thread shortcut. Always enabled — distinct from
+                    // clearHistory which wipes the active thread.
+                    Button { service.newThread() } label: {
+                        Image(systemName: "square.and.pencil")
+                    }
+                    // Clear active thread (renamed from "history" because
+                    // it now scopes to one thread, not the whole app).
                     Button {
                         service.clearHistory()
                     } label: {
@@ -242,6 +469,11 @@ struct AIChatView: View {
                     }
                     .disabled(service.messages.isEmpty)
                 }
+            }
+            .sheet(isPresented: $showThreadList) {
+                ThreadListSheet(service: service)
+                    .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
             }
         }
         .presentationDetents([.large])
@@ -605,5 +837,132 @@ extension AppStore {
         }
 
         return lines.joined(separator: "\n")
+    }
+}
+
+// MARK: - Thread List Sheet
+//
+// Phase 8 / AI v2 — sidebar / picker for switching between parallel
+// conversations. Sorted active-first, newest-first. Each row shows
+// title + preview + last-activity timestamp. Swipe-to-delete on the
+// inactive rows; swipe-to-archive toggle on both.
+
+struct ThreadListSheet: View {
+    @ObservedObject var service: AIChatService
+    @Environment(\.dismiss) var dismiss
+
+    private var activeThreads: [ChatThread] {
+        service.threads.filter { !$0.isArchived }
+    }
+
+    private var archivedThreads: [ChatThread] {
+        service.threads.filter { $0.isArchived }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if activeThreads.isEmpty {
+                    emptyState
+                } else {
+                    Section("Conversations (\(activeThreads.count))") {
+                        ForEach(activeThreads) { thread in
+                            threadRow(thread, isArchived: false)
+                        }
+                    }
+                }
+                if !archivedThreads.isEmpty {
+                    Section("Archived (\(archivedThreads.count))") {
+                        ForEach(archivedThreads) { thread in
+                            threadRow(thread, isArchived: true)
+                        }
+                    }
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle("Conversations")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Close") { dismiss() }
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button {
+                        service.newThread()
+                        dismiss()
+                    } label: {
+                        Label("New", systemImage: "square.and.pencil")
+                    }
+                }
+            }
+        }
+    }
+
+    private func threadRow(_ thread: ChatThread, isArchived: Bool) -> some View {
+        let isActive = thread.id == service.activeThreadID
+        return Button {
+            service.selectThread(thread.id)
+            dismiss()
+        } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        if isActive {
+                            Circle().fill(Color.blue).frame(width: 6, height: 6)
+                        }
+                        Text(thread.title)
+                            .font(.subheadline).bold()
+                            .foregroundColor(isArchived ? .secondary : .primary)
+                            .lineLimit(1)
+                    }
+                    Text(thread.preview)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                    Text(thread.updatedAt.formatted(.relative(presentation: .named)))
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                if isActive {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button(role: .destructive) {
+                service.deleteThread(thread.id)
+            } label: {
+                Label("Delete", systemImage: "trash")
+            }
+            Button {
+                service.toggleArchive(thread.id)
+            } label: {
+                Label(isArchived ? "Unarchive" : "Archive",
+                      systemImage: isArchived ? "tray.and.arrow.up" : "archivebox")
+            }
+            .tint(.orange)
+        }
+    }
+
+    private var emptyState: some View {
+        VStack(spacing: 14) {
+            Image(systemName: "bubble.left.and.bubble.right")
+                .font(.system(size: 44))
+                .foregroundColor(.secondary)
+            Text("No conversations yet")
+                .font(.headline)
+            Text("Start a new one — your chats are saved here and survive cold launches.")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+        }
+        .frame(maxWidth: .infinity, minHeight: 200)
+        .listRowBackground(Color.clear)
     }
 }
