@@ -151,6 +151,10 @@ struct ScheduleCalendarView: View {
                     } label: {
                         Image(systemName: "plus")
                     }
+                    // Phase 7 / Wave 2: First-launch sync gate. Schedule
+                    // entries reference projects + employees + crews —
+                    // all server-resident. Block create until first pull.
+                    .disabled(!store.hasCompletedFirstSync)
                 }
                 // Phase 2 — Dispatch Board entry point. Pushes a sibling
                 // view rather than swapping the calendar body, so the

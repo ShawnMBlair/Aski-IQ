@@ -58,6 +58,7 @@ struct SystemOverviewView: View {
                 healthBanner
                 dataCountsSection
                 openItemsSection
+                configurationSection
                 syncSection
                 workflowAlertsSection
                 dangerZoneSection
@@ -139,6 +140,31 @@ struct SystemOverviewView: View {
             adminNavRow("Schedule Conflicts", value: store.criticalScheduleConflicts.count, threshold: 1, color: .red) { ScheduleConflictListView(date: nil) }
             Divider()
             adminNavRow("Equipment Service Due", value: store.equipmentNeedingService.count, threshold: 1, color: .orange) { EquipmentListView() }
+        }
+    }
+
+    /// Configuration entries (workflow_settings, etc.). Manager+ only — the
+    /// row itself enforces the role check at render time so the link is
+    /// hidden from lower roles rather than presenting a "Restricted" page.
+    @ViewBuilder
+    private var configurationSection: some View {
+        if [.manager, .executive, .owner].contains(store.currentUserRole) {
+            GroupBox("Configuration") {
+                NavigationLink {
+                    WorkflowSettingsAdminView()
+                } label: {
+                    HStack {
+                        Label("Approval Limits", systemImage: "checkmark.shield.fill")
+                            .font(.subheadline)
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.caption2).foregroundColor(.secondary)
+                    }
+                    .padding(.vertical, 4)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal)
         }
     }
 

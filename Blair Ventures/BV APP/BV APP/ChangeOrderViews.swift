@@ -24,12 +24,20 @@ struct ChangeOrderListView: View {
     }
 
     var body: some View {
-        COListBody(
-            items: filtered,
-            filterStatus: $filterStatus,
-            projectID: projectID,
-            showCreate: $showCreate
-        )
+        VStack(spacing: 0) {
+            // Phase 7 / Wave 2: First-launch sync gate.
+            if !store.hasCompletedFirstSync {
+                FirstLaunchSyncGateBanner()
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+            }
+            COListBody(
+                items: filtered,
+                filterStatus: $filterStatus,
+                projectID: projectID,
+                showCreate: $showCreate
+            )
+        }
         .navigationTitle(projectID != nil ? "Change Orders" : "All Change Orders")
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await store.refreshAll() }
@@ -39,6 +47,7 @@ struct ChangeOrderListView: View {
                     Button { showCreate = true } label: {
                         Image(systemName: "plus")
                     }
+                    .disabled(!store.hasCompletedFirstSync)
                 }
             }
         }

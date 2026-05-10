@@ -68,10 +68,15 @@ extension AppStore {
     /// Auto-generated next number, scoped to the current calendar year.
     /// Format: `C-YYYY-NNN` (e.g. `C-2026-007`). Same pattern the rest
     /// of the app uses for invoice / quote numbers.
+    /// Phase 3: parsed-max+1 was already in place; added companyID +
+    /// !isDeleted filters to match the project-wide standard. DB-side
+    /// partial unique index on (company_id, contract_number) WHERE
+    /// is_deleted = false (CON1 migration) catches cross-device races.
     func nextContractNumber() -> String {
         let year = Calendar.current.component(.year, from: Date())
         let prefix = "C-\(year)-"
         let used = contracts
+            .filter { $0.companyID == currentCompanyID && !$0.isDeleted }
             .compactMap { c -> Int? in
                 guard let n = c.contractNumber, n.hasPrefix(prefix) else { return nil }
                 return Int(n.dropFirst(prefix.count))

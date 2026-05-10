@@ -260,7 +260,7 @@ private struct MoreFieldOpsSection: View {
             NavigationLink(destination: TimesheetDailyEntryView()) {
                 Label("Log Hours", systemImage: "clock.fill")
             }
-            if store.currentUserRole.canApproveTimesheets {
+            if store.canPerform(action: .timesheetApprove) {
                 NavigationLink(destination: TimesheetApprovalQueueView()) {
                     MoreBadgeRow(label: "Approval Queue", icon: "checkmark.circle.fill",
                                  count: store.pendingTimesheets().count, color: .orange)

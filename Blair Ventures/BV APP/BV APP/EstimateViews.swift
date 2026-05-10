@@ -60,6 +60,14 @@ struct EstimateListView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                // Phase 7 first-launch sync gate. Estimates reference
+                // clients + opportunities — both server-resident. Block
+                // create until first pull arrives.
+                if !store.hasCompletedFirstSync {
+                    FirstLaunchSyncGateBanner()
+                        .padding(.horizontal)
+                        .padding(.top, 8)
+                }
 
                 // Status Filter Bar
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -187,6 +195,7 @@ struct EstimateListView: View {
                     Button { showCreate = true } label: {
                         Image(systemName: "plus")
                     }
+                    .disabled(!store.hasCompletedFirstSync)
                 }
             }
             // Slice 6: route the "+" through CommercialIntakeView so

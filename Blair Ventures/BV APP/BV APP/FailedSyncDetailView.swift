@@ -367,16 +367,53 @@ struct FailedSyncDetailView: View {
 
     @ViewBuilder
     private func rowView(_ row: FailedRow) -> some View {
+        // Phase 2 Failed-Sync visibility: show the per-row error reason
+        // (when sync engine populated `store.syncErrors` for this id)
+        // and a Copy Code button that pastes the raw error string for
+        // support handoff.
+        let info = store.syncErrors[row.id]
+
         VStack(alignment: .leading, spacing: 4) {
             Text(row.label).font(.subheadline)
             Text("ID \(row.id.uuidString.prefix(8))…")
                 .font(.caption2)
                 .fontDesign(.monospaced)
                 .foregroundColor(.secondary)
+            if let info {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                    Text(info.reason)
+                        .font(.caption)
+                        .foregroundColor(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.top, 2)
+                if !info.code.isEmpty {
+                    HStack(spacing: 6) {
+                        Text("Code \(info.code)")
+                            .font(.caption2)
+                            .fontDesign(.monospaced)
+                            .foregroundColor(.secondary)
+                        Button {
+                            #if canImport(UIKit)
+                            UIPasteboard.general.string = "Code \(info.code)\n\n\(info.rawMessage)"
+                            ToastService.shared.success("Error code copied.")
+                            #endif
+                        } label: {
+                            Label("Copy Code", systemImage: "doc.on.doc")
+                                .font(.caption2)
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
+            }
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) {
                 row.discard(row.id)
+                store.clearSyncError(id: row.id)
             } label: {
                 Label("Discard", systemImage: "trash")
             }

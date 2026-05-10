@@ -43,6 +43,7 @@ struct InvoiceListView: View {
                             Image(systemName: "chart.bar.doc.horizontal")
                         }
                         Button { showCreate = true } label: { Image(systemName: "plus") }
+                            .disabled(!store.hasCompletedFirstSync)
                     }
                 }
                 .sheet(isPresented: $showCreate) {
@@ -56,6 +57,15 @@ struct InvoiceListView: View {
 
     private var listContent: some View {
         VStack(spacing: 0) {
+            // Phase 7 first-launch sync gate. Invoices reference clients,
+            // projects, and (often) quotes — all server-resident. Block
+            // create until first pull arrives so a fresh-install user
+            // can't emit invoices that fail FK on push.
+            if !store.hasCompletedFirstSync {
+                FirstLaunchSyncGateBanner()
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+            }
             InvoiceSummaryBar()
                 .padding(.horizontal)
                 .padding(.vertical, 10)

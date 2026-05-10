@@ -54,6 +54,41 @@ final class AppStore: ObservableObject {
     @Published var clientPricings:       [ClientPricing]      = []
     @Published var importBatches:        [ImportBatch]        = []
 
+    /// Per-record sync error metadata. Populated by sync push catch
+    /// blocks via `recordSyncError(id:error:)`; cleared on successful
+    /// retry / discard. In-memory only — failed records reattempt on
+    /// the next push cycle, so persisting the error string across app
+    /// launches doesn't add value. Surfaced in FailedSyncDetailView so
+    /// operators can see the actual reason instead of a generic
+    /// "RLS or FK violation."
+    @Published var syncErrors: [UUID: SyncErrorInfo] = [:]
+
+    /// Phase 2 stabilization: tracks whether the first full pull has
+    /// completed since this device installed the app. Backed by
+    /// UserDefaults so a quit-and-relaunch keeps the flag set.
+    ///
+    /// Used to gate sensitive create flows (MR / PO today; other modules
+    /// to follow) so a fresh-install user can't emit a record that
+    /// references a project / client / opportunity their local store
+    /// hasn't pulled yet — that path produces silent duplicate-number
+    /// collisions, FK violations, and the auto-link-trigger NOT NULL
+    /// failures we saw on 2026-05-09.
+    ///
+    /// Set to true in three places:
+    ///   • SyncEngine.pullAll on successful completion (the canonical
+    ///     "first sync done" signal).
+    ///   • AppStore.init when the on-disk store already has data
+    ///     (existing users upgrading to this build don't see the gate).
+    ///   • Manual override via Admin Panel — escape hatch if a tenant
+    ///     hits a bug with the gate logic; never expected in normal use.
+    @Published var hasCompletedFirstSync: Bool = {
+        UserDefaults.standard.bool(forKey: "bv_has_completed_first_sync")
+    }() {
+        didSet {
+            UserDefaults.standard.set(hasCompletedFirstSync, forKey: "bv_has_completed_first_sync")
+        }
+    }
+
     /// Phase 12 follow-up: cache of all profiles in the current tenant
     /// (id + role + email), pulled from the `profiles` table. Used by
     /// QuoteApprovalNotifier to email the actual matching managers /
@@ -68,6 +103,17 @@ final class AppStore: ObservableObject {
     @Published var contractMilestones:   [ContractMilestone]  = []
     @Published var complianceDocuments:  [ComplianceDocument] = []
     @Published var lienWaivers:          [LienWaiver]         = []
+
+    // Approval limits + workflow permissions per role per company. Populated
+    // by SyncEngine.pullWorkflowSettings(); consumed by AppStore helpers in
+    // WorkflowSetting.swift to gate Submit/Approve/Send/Receive actions.
+    @Published var workflowSettings:     [WorkflowSetting]    = []
+
+    // Read-only audit history for Material Requests. Written server-side by
+    // the log_material_request_status_change trigger; pulled by
+    // SyncEngine.pullMaterialRequestAudit() and shown in MRDetailView's
+    // History section.
+    @Published var materialRequestAudits: [MaterialRequestAudit] = []
 
     // MARK: - CRM State
     @Published var crmContacts:     [CRMContact]     = []

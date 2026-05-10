@@ -84,12 +84,14 @@ extension SyncEngine {
                 let sample_data_created_at: String?
                 let sample_data_created_by: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.changeOrders)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.changeOrders,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ]
+            )
 
             var merged = store.changeOrders.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -184,15 +186,22 @@ extension SyncEngine {
                     sample_data_created_at:   co.sampleDataCreatedAt.map { isoFull.string(from: $0) },
                     sample_data_created_by:   co.sampleDataCreatedBy?.uuidString
                 )
-                try await supabase.from(SupabaseTable.changeOrders).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.changeOrders)
                 if let i = store.changeOrders.firstIndex(where: { $0.id == co.id }) {
                     store.changeOrders[i].syncStatus = .synced
                 }
                 store.changeOrders.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: co.id) }
             } catch {
                 if let i = store.changeOrders.firstIndex(where: { $0.id == co.id }) {
                     store.changeOrders[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: co.id, error: error) }
+                CrashReporter.capture(error: error, context: [
+                    "operation": "pushPendingChangeOrders",
+                    "co_id":     co.id.uuidString,
+                    "co_number": co.number
+                ])
             }
         }
         store.saveChangeOrders()
@@ -214,12 +223,14 @@ extension SyncEngine {
                 let has_cost_impact, has_schedule_impact: Bool
                 let required_by_date, submitted_date, answered_date: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.rfis)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.rfis,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ]
+            )
 
             var merged = store.rfis.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -298,15 +309,22 @@ extension SyncEngine {
                     deleted_at:          rfi.deletedAt.map { isoFull.string(from: $0) },
                     deleted_by:          rfi.deletedBy
                 )
-                try await supabase.from(SupabaseTable.rfis).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.rfis)
                 if let i = store.rfis.firstIndex(where: { $0.id == rfi.id }) {
                     store.rfis[i].syncStatus = .synced
                 }
                 store.rfis.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: rfi.id) }
             } catch {
                 if let i = store.rfis.firstIndex(where: { $0.id == rfi.id }) {
                     store.rfis[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: rfi.id, error: error) }
+                CrashReporter.capture(error: error, context: [
+                    "operation":   "pushPendingRFIs",
+                    "rfi_id":      rfi.id.uuidString,
+                    "rfi_number":  rfi.number
+                ])
             }
         }
         store.saveRFIs()
@@ -325,11 +343,11 @@ extension SyncEngine {
                 let original_contract_value, contingency_amount: Double
                 let lines_json: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.projectBudgets)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.projectBudgets,
+                filters: [.eq("company_id", companyID.uuidString)]
+            )
 
             var merged = store.projectBudgets.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -375,7 +393,7 @@ extension SyncEngine {
                     lines_json:              jsonString(bud.lines),
                     last_modified_by:        bud.lastModifiedBy.isEmpty ? nil : bud.lastModifiedBy
                 )
-                try await supabase.from(SupabaseTable.projectBudgets).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.projectBudgets)
                 if let i = store.projectBudgets.firstIndex(where: { $0.id == bud.id }) {
                     store.projectBudgets[i].syncStatus = .synced
                 }
@@ -406,11 +424,11 @@ extension SyncEngine {
                 let rating: Int?
                 let notes: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.subcontractors)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.subcontractors,
+                filters: [.eq("company_id", companyID.uuidString)]
+            )
 
             var merged = store.subcontractors.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -487,7 +505,7 @@ extension SyncEngine {
                     notes:                         sub.notes,
                     last_modified_by:              sub.lastModifiedBy.isEmpty ? nil : sub.lastModifiedBy
                 )
-                try await supabase.from(SupabaseTable.subcontractors).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.subcontractors)
                 if let i = store.subcontractors.firstIndex(where: { $0.id == sub.id }) {
                     store.subcontractors[i].syncStatus = .synced
                 }
@@ -518,11 +536,11 @@ extension SyncEngine {
                 /// Contract row when this SubContract has been promoted.
                 let linked_contract_id: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.subContracts)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.subContracts,
+                filters: [.eq("company_id", companyID.uuidString)]
+            )
 
             var merged = store.subContracts.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -593,14 +611,21 @@ extension SyncEngine {
                     last_modified_by:  sc.lastModifiedBy.isEmpty ? nil : sc.lastModifiedBy,
                     linked_contract_id: sc.linkedContractID?.uuidString
                 )
-                try await supabase.from(SupabaseTable.subContracts).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.subContracts)
                 if let i = store.subContracts.firstIndex(where: { $0.id == sc.id }) {
                     store.subContracts[i].syncStatus = .synced
                 }
+                await MainActor.run { store.clearSyncError(id: sc.id) }
             } catch {
                 if let i = store.subContracts.firstIndex(where: { $0.id == sc.id }) {
                     store.subContracts[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: sc.id, error: error) }
+                CrashReporter.capture(error: error, context: [
+                    "operation":           "pushPendingSubContracts",
+                    "subcontract_id":       sc.id.uuidString,
+                    "subcontract_number":   sc.contractNumber
+                ])
             }
         }
         store.saveSubContracts()
@@ -632,14 +657,17 @@ extension SyncEngine {
                 /// default 'USD'.
                 let currency: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.invoices)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .order("created_at", ascending: false)
-                .limit(200)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.invoices,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ],
+                orderBy: "created_at",
+                ascending: false,
+                limit: 200
+            )
 
             var merged = store.invoices.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -736,15 +764,22 @@ extension SyncEngine {
                     locked_from_tax_rate: inv.lockedFromTaxRate.map { toDouble($0) },
                     currency:         inv.currency.isEmpty ? "USD" : inv.currency
                 )
-                try await supabase.from(SupabaseTable.invoices).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.invoices)
                 if let i = store.invoices.firstIndex(where: { $0.id == inv.id }) {
                     store.invoices[i].syncStatus = .synced
                 }
                 store.invoices.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: inv.id) }
             } catch {
                 if let i = store.invoices.firstIndex(where: { $0.id == inv.id }) {
                     store.invoices[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: inv.id, error: error) }
+                CrashReporter.capture(error: error, context: [
+                    "operation": "pushPendingInvoices",
+                    "invoice_id":     inv.id.uuidString,
+                    "invoice_number": inv.invoiceNumber
+                ])
             }
         }
         store.saveInvoices()
@@ -755,10 +790,179 @@ extension SyncEngine {
     // ─────────────────────────────────────────────────────────────────────────
 
     func pullProcurement(role: UserRole) async {
+        // Workflow settings drive the Submit/Approve/Send/Receive button
+        // gating in MR + PO flows, so they need to be hydrated before any
+        // procurement view renders. Pulled even for field roles because
+        // `canCreateMaterialRequest` is itself a workflow setting.
+        await pullWorkflowSettings()
         guard !role.isFieldRole && !role.isExternal else { return }
         await pullSuppliers()
         await pullMaterialRequests()
         await pullPurchaseOrders()
+        // Audit history depends on the requests being present locally so the
+        // History section can resolve materialRequestID → request. Pulled
+        // last for that reason.
+        await pullMaterialRequestAudit()
+    }
+
+    // MARK: Material Request Audit (read-only; written by DB trigger)
+
+    /// Hydrate the audit history for the current company. Pull-only model:
+    /// rows are written exclusively by log_material_request_status_change,
+    /// never by the client, so we replace the local cache wholesale on each
+    /// pull. Bounded by status flips per request × requests per company —
+    /// typically small enough to pull in one page. If this ever grows, add
+    /// a `gt: performed_at` filter against the most recent local row.
+    func pullMaterialRequestAudit() async {
+        guard let companyID = store.currentCompanyID else { return }
+        do {
+            struct Row: Codable {
+                let id: String
+                let company_id: String
+                let material_request_id: String
+                let action: String
+                let performed_by: String?
+                let performed_at: String
+                let old_status: String?
+                let new_status: String?
+                let metadata: AnyJSON?
+            }
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.materialRequestAudit,
+                filters: [.eq("company_id", companyID.uuidString)],
+                orderBy: "performed_at",
+                ascending: false
+            )
+
+            let events: [MaterialRequestAudit] = rows.compactMap { row in
+                guard let id  = UUID(uuidString: row.id),
+                      let cid = UUID(uuidString: row.company_id),
+                      let mrid = UUID(uuidString: row.material_request_id) else { return nil }
+                let perfAt = parseDate(row.performed_at) ?? Date()
+                let metadataData = (try? JSONEncoder().encode(row.metadata)) ?? Data()
+                return MaterialRequestAudit(
+                    id:                id,
+                    companyID:         cid,
+                    materialRequestID: mrid,
+                    action:            row.action,
+                    performedByID:     row.performed_by.flatMap { UUID(uuidString: $0) },
+                    performedAt:       perfAt,
+                    oldStatus:         row.old_status,
+                    newStatus:         row.new_status,
+                    metadataRaw:       metadataData
+                )
+            }
+            await MainActor.run {
+                store.materialRequestAudits = events
+                store.objectWillChange.send()
+            }
+        } catch {
+            print("⚠️ \(#function) failed: \(error)")
+            CrashReporter.capture(error: error, context: ["operation": "\(#function)"])
+        }
+    }
+
+    // MARK: Workflow Settings (approval limits per role per company)
+
+    /// Push a single workflow_settings row to Supabase. Called by
+    /// AppStore.upsertWorkflowSetting when the admin saves a change. Single
+    /// row at a time because admin edits are rare and unbatched — no need
+    /// for a pending-set + bulk push pattern.
+    func pushPendingWorkflowSettings(_ setting: WorkflowSetting) async {
+        do {
+            struct Row: Codable {
+                let id, company_id, role_key: String
+                let approval_limit_amount: Decimal
+                let can_self_approve: Bool
+                let can_create_material_request: Bool
+                let can_approve_material_request: Bool
+                let can_send_to_supplier: Bool
+                let can_receive_materials: Bool
+                let is_active: Bool
+                let updated_at: String
+            }
+            let row = Row(
+                id:                            setting.id.uuidString,
+                company_id:                    setting.companyID.uuidString,
+                role_key:                      setting.roleKey,
+                approval_limit_amount:         setting.approvalLimitAmount,
+                can_self_approve:              setting.canSelfApprove,
+                can_create_material_request:   setting.canCreateMaterialRequest,
+                can_approve_material_request:  setting.canApproveMaterialRequest,
+                can_send_to_supplier:          setting.canSendToSupplier,
+                can_receive_materials:         setting.canReceiveMaterials,
+                is_active:                     setting.isActive,
+                updated_at:                    isoFull.string(from: setting.updatedAt)
+            )
+            // ON CONFLICT (company_id, role_key) — the migration creates a
+            // unique constraint on this pair, so upsert resolves to update.
+            try await supabase
+                .from(SupabaseTable.workflowSettings)
+                .upsert(row, onConflict: "company_id,role_key")
+                .execute()
+        } catch {
+            print("⚠️ \(#function) failed: \(error)")
+            CrashReporter.capture(error: error, context: ["operation": "\(#function)"])
+            await MainActor.run {
+                ToastService.shared.error("Couldn't save workflow setting: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Hydrate workflow_settings for the current company. Replaces the local
+    /// cache wholesale because rows are admin-managed in the DB — there are
+    /// no pending local writes to merge in.
+    func pullWorkflowSettings() async {
+        guard let companyID = store.currentCompanyID else { return }
+        do {
+            struct Row: Codable {
+                let id: String
+                let company_id: String
+                let role_key: String
+                let approval_limit_amount: Decimal
+                let can_self_approve: Bool
+                let can_create_material_request: Bool
+                let can_approve_material_request: Bool
+                let can_send_to_supplier: Bool
+                let can_receive_materials: Bool
+                let is_active: Bool
+                let updated_at: String?
+            }
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.workflowSettings,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_active", true)
+                ]
+            )
+
+            let settings: [WorkflowSetting] = rows.compactMap { row in
+                guard let id  = UUID(uuidString: row.id),
+                      let cid = UUID(uuidString: row.company_id) else { return nil }
+                return WorkflowSetting(
+                    id:                            id,
+                    companyID:                     cid,
+                    roleKey:                       row.role_key,
+                    approvalLimitAmount:           row.approval_limit_amount,
+                    canSelfApprove:                row.can_self_approve,
+                    canCreateMaterialRequest:      row.can_create_material_request,
+                    canApproveMaterialRequest:     row.can_approve_material_request,
+                    canSendToSupplier:             row.can_send_to_supplier,
+                    canReceiveMaterials:           row.can_receive_materials,
+                    isActive:                      row.is_active,
+                    updatedAt:                     parseDate(row.updated_at) ?? Date()
+                )
+            }
+            await MainActor.run {
+                store.workflowSettings = settings
+                store.objectWillChange.send()
+            }
+        } catch {
+            print("⚠️ \(#function) failed: \(error)")
+            CrashReporter.capture(error: error, context: ["operation": "\(#function)"])
+        }
     }
 
     func pushPendingProcurement() async {
@@ -779,12 +983,14 @@ extension SyncEngine {
                 let is_preferred: Bool
                 let updated_at: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.suppliers)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.suppliers,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ]
+            )
 
             var merged = store.suppliers.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -846,15 +1052,22 @@ extension SyncEngine {
                     deleted_at:       sup.deletedAt.map { isoFull.string(from: $0) },
                     deleted_by:       sup.deletedBy
                 )
-                try await supabase.from(SupabaseTable.suppliers).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.suppliers)
                 if let i = store.suppliers.firstIndex(where: { $0.id == sup.id }) {
                     store.suppliers[i].syncStatus = .synced
                 }
                 store.suppliers.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: sup.id) }
             } catch {
                 if let i = store.suppliers.firstIndex(where: { $0.id == sup.id }) {
                     store.suppliers[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: sup.id, error: error) }
+                CrashReporter.capture(error: error, context: [
+                    "operation":     "pushPendingSuppliers",
+                    "supplier_id":    sup.id.uuidString,
+                    "supplier_name":  sup.name
+                ])
             }
         }
     }
@@ -866,18 +1079,31 @@ extension SyncEngine {
         do {
             struct Row: Codable {
                 let id, request_number, status: String
-                let project_id: String?
-                let requested_by_name: String?
+                let project_id, supplier_id, material_sales_id, requested_by_employee_id: String?
+                let destination_type: String?
+                let requested_by_name, requested_by_email: String?
                 let request_date, required_by_date: String?
                 let notes, site_location: String?
                 let line_items_json: String?
+                // Audit fields
+                let submitted_by_user_id, approved_by_user_id, received_by_user_id: String?
+                let submitted_at, approved_at, ordered_at, received_at, closed_at: String?
+                let approval_note: String?
+                // PDF tracking
+                let pdf_storage_path: String?
+                let pdf_generated_at: String?
+                // Delivery proof + reference scan
+                let delivery_photo_url: String?
+                let receipt_scan_path: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.materialRequests)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.materialRequests,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ]
+            )
 
             var merged = store.materialRequests.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -888,12 +1114,31 @@ extension SyncEngine {
                 var mr = MaterialRequest(requestNumber: row.request_number, projectID: projID)
                 mr.id               = uuid
                 mr.status           = MaterialRequestStatus(rawValue: row.status) ?? .draft
+                mr.destinationType  = row.destination_type
+                    .flatMap { MaterialRequestDestinationType(rawValue: $0) } ?? .internalUse
+                mr.materialSaleID   = row.material_sales_id.flatMap { UUID(uuidString: $0) }
+                mr.supplierID       = row.supplier_id.flatMap { UUID(uuidString: $0) }
+                mr.requestedByID    = row.requested_by_employee_id.flatMap { UUID(uuidString: $0) }
                 mr.requestedByName  = row.requested_by_name ?? ""
+                mr.requestedByEmail = row.requested_by_email
                 mr.requestDate      = parseDate(row.request_date) ?? Date()
                 mr.requiredByDate   = parseDate(row.required_by_date)
                 mr.notes            = row.notes ?? ""
                 mr.siteLocation     = row.site_location ?? ""
                 mr.lineItems        = decodeJSON(row.line_items_json, as: [MaterialLineItem].self) ?? []
+                mr.submittedByID    = row.submitted_by_user_id.flatMap { UUID(uuidString: $0) }
+                mr.submittedAt      = parseDate(row.submitted_at)
+                mr.approvedByID     = row.approved_by_user_id.flatMap { UUID(uuidString: $0) }
+                mr.approvedAt       = parseDate(row.approved_at)
+                mr.approvalNote     = row.approval_note ?? ""
+                mr.orderedAt        = parseDate(row.ordered_at)
+                mr.receivedByID     = row.received_by_user_id.flatMap { UUID(uuidString: $0) }
+                mr.receivedAt       = parseDate(row.received_at)
+                mr.closedAt         = parseDate(row.closed_at)
+                mr.pdfStoragePath   = row.pdf_storage_path
+                mr.pdfGeneratedAt   = parseDate(row.pdf_generated_at)
+                mr.deliveryPhotoURL = row.delivery_photo_url
+                mr.receiptScanPath  = row.receipt_scan_path
                 mr.syncStatus       = .synced
                 merged.removeAll { $0.id == uuid }
                 merged.append(mr)
@@ -914,11 +1159,23 @@ extension SyncEngine {
             do {
                 struct Row: Codable {
                     let id, company_id, request_number, status: String
-                    let project_id: String?
-                    let requested_by_name: String?
+                    let destination_type: String
+                    let project_id, supplier_id, material_sales_id, requested_by_employee_id: String?
+                    let requested_by_name, requested_by_email: String?
                     let request_date, required_by_date: String?
                     let notes, site_location: String?
                     let line_items_json: String?
+                    let total_estimated_cost: Decimal
+                    // Audit fields — set by the typed transition methods on
+                    // AppStore. Pushing them so the DB trigger captures
+                    // who/when in material_request_audit metadata.
+                    let submitted_by_user_id, approved_by_user_id, received_by_user_id: String?
+                    let submitted_at, approved_at, ordered_at, received_at, closed_at: String?
+                    let approval_note: String?
+                    let pdf_storage_path: String?
+                    let pdf_generated_at: String?
+                    let delivery_photo_url: String?
+                    let receipt_scan_path: String?
                     let is_deleted: Bool
                     let deleted_at: String?
                     let deleted_by: String?
@@ -928,26 +1185,68 @@ extension SyncEngine {
                     company_id:        (mr.companyID ?? companyID).uuidString,
                     request_number:    mr.requestNumber,
                     status:            mr.status.rawValue,
+                    destination_type:  mr.destinationType.rawValue,
                     project_id:        mr.projectID?.uuidString,
-                    requested_by_name: mr.requestedByName.isEmpty ? nil : mr.requestedByName,
+                    supplier_id:       mr.supplierID?.uuidString,
+                    material_sales_id: mr.materialSaleID?.uuidString,
+                    requested_by_employee_id: mr.requestedByID?.uuidString,
+                    requested_by_name:  mr.requestedByName.isEmpty ? nil : mr.requestedByName,
+                    requested_by_email: mr.requestedByEmail,
                     request_date:      isoDateFmt.string(from: mr.requestDate),
                     required_by_date:  mr.requiredByDate.map { isoDateFmt.string(from: $0) },
                     notes:             mr.notes.isEmpty        ? nil : mr.notes,
                     site_location:     mr.siteLocation.isEmpty ? nil : mr.siteLocation,
                     line_items_json:   jsonString(mr.lineItems),
+                    // Push the client-computed total so the DB column reflects
+                    // the canonical value even before child-table sync lands.
+                    // The recalc trigger preserves this on no-children updates;
+                    // it'll naturally take over once children exist (Phase 3).
+                    total_estimated_cost: mr.estimatedTotal,
+                    submitted_by_user_id: mr.submittedByID?.uuidString,
+                    approved_by_user_id:  mr.approvedByID?.uuidString,
+                    received_by_user_id:  mr.receivedByID?.uuidString,
+                    submitted_at:      mr.submittedAt.map { isoFull.string(from: $0) },
+                    approved_at:       mr.approvedAt.map  { isoFull.string(from: $0) },
+                    ordered_at:        mr.orderedAt.map   { isoFull.string(from: $0) },
+                    received_at:       mr.receivedAt.map  { isoFull.string(from: $0) },
+                    closed_at:         mr.closedAt.map    { isoFull.string(from: $0) },
+                    approval_note:     mr.approvalNote.isEmpty ? nil : mr.approvalNote,
+                    pdf_storage_path:  mr.pdfStoragePath,
+                    pdf_generated_at:  mr.pdfGeneratedAt.map { isoFull.string(from: $0) },
+                    delivery_photo_url: mr.deliveryPhotoURL,
+                    receipt_scan_path:  mr.receiptScanPath,
                     is_deleted:        mr.isDeleted,
                     deleted_at:        mr.deletedAt.map { isoFull.string(from: $0) },
                     deleted_by:        mr.deletedBy
                 )
-                try await supabase.from(SupabaseTable.materialRequests).upsert(row).execute()
+                // Phase 5 / Wave 2: migrated to AskiSyncClient seam.
+                // Live impl delegates to the same supabase chain so prod
+                // behavior is unchanged; the protocol seam unlocks unit
+                // tests with a FakeSyncClient.
+                try await client.upsert(row, into: SupabaseTable.materialRequests)
                 if let i = store.materialRequests.firstIndex(where: { $0.id == mr.id }) {
                     store.materialRequests[i].syncStatus = .synced
                 }
                 store.materialRequests.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                // Phase 2 Failed-Sync visibility: clear any prior error
+                // metadata so a successful retry doesn't leave a stale
+                // reason on the row in the UI.
+                await MainActor.run { store.clearSyncError(id: mr.id) }
             } catch {
                 if let i = store.materialRequests.firstIndex(where: { $0.id == mr.id }) {
                     store.materialRequests[i].syncStatus = .failed
                 }
+                // Phase 2 Failed-Sync visibility: capture the error
+                // reason so FailedSyncDetailView can show it per row
+                // instead of the generic "RLS or FK violation" copy.
+                // Non-fatal — falls back to the legacy generic message
+                // if mapping yields an empty reason.
+                await MainActor.run { store.recordSyncError(id: mr.id, error: error) }
+                CrashReporter.capture(error: error, context: [
+                    "operation": "pushPendingMaterialRequests",
+                    "request_id":     mr.id.uuidString,
+                    "request_number": mr.requestNumber
+                ])
             }
         }
         store.saveMaterialRequests()
@@ -966,13 +1265,23 @@ extension SyncEngine {
                 let delivery_address, terms, notes: String?
                 let tax_rate: Double
                 let line_items_json: String?
+                let delivery_photo_url: String?
+                // Invoice match (Phase 3)
+                let invoice_number, invoice_scan_path, invoice_match_note: String?
+                let invoice_date: String?
+                let invoice_amount: Decimal?
+                let invoice_matched_at: String?
+                let invoice_matched_by: String?
+                let invoice_flagged: Bool?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.purchaseOrders)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.purchaseOrders,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ]
+            )
 
             var merged = store.purchaseOrders.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -993,6 +1302,15 @@ extension SyncEngine {
                 po.notes           = row.notes ?? ""
                 po.taxRate         = fromDouble(row.tax_rate)
                 po.lineItems       = decodeJSON(row.line_items_json, as: [MaterialLineItem].self) ?? []
+                po.deliveryPhotoURL = row.delivery_photo_url
+                po.invoiceNumber    = row.invoice_number
+                po.invoiceDate      = parseDate(row.invoice_date)
+                po.invoiceAmount    = row.invoice_amount
+                po.invoiceScanPath  = row.invoice_scan_path
+                po.invoiceMatchedAt = parseDate(row.invoice_matched_at)
+                po.invoiceMatchedBy = row.invoice_matched_by.flatMap { UUID(uuidString: $0) }
+                po.invoiceMatchNote = row.invoice_match_note
+                po.invoiceFlagged   = row.invoice_flagged ?? false
                 po.syncStatus      = .synced
                 merged.removeAll { $0.id == uuid }
                 merged.append(po)
@@ -1018,6 +1336,13 @@ extension SyncEngine {
                     let delivery_address, terms, notes: String?
                     let tax_rate: Double
                     let line_items_json: String?
+                    let delivery_photo_url: String?
+                    let invoice_number, invoice_scan_path, invoice_match_note: String?
+                    let invoice_date: String?
+                    let invoice_amount: Decimal?
+                    let invoice_matched_at: String?
+                    let invoice_matched_by: String?
+                    let invoice_flagged: Bool
                     let is_deleted: Bool
                     let deleted_at: String?
                     let deleted_by: String?
@@ -1038,19 +1363,43 @@ extension SyncEngine {
                     notes:            po.notes.isEmpty    ? nil : po.notes,
                     tax_rate:         toDouble(po.taxRate),
                     line_items_json:  jsonString(po.lineItems),
+                    delivery_photo_url: po.deliveryPhotoURL,
+                    invoice_number:    po.invoiceNumber,
+                    invoice_scan_path: po.invoiceScanPath,
+                    invoice_match_note: po.invoiceMatchNote,
+                    invoice_date:      po.invoiceDate.map { isoDateFmt.string(from: $0) },
+                    invoice_amount:    po.invoiceAmount,
+                    invoice_matched_at: po.invoiceMatchedAt.map { isoFull.string(from: $0) },
+                    invoice_matched_by: po.invoiceMatchedBy?.uuidString,
+                    invoice_flagged:   po.invoiceFlagged,
                     is_deleted:       po.isDeleted,
                     deleted_at:       po.deletedAt.map { isoFull.string(from: $0) },
                     deleted_by:       po.deletedBy
                 )
-                try await supabase.from(SupabaseTable.purchaseOrders).upsert(row).execute()
+                // Phase 5 / Wave 2: migrated to AskiSyncClient seam.
+                try await client.upsert(row, into: SupabaseTable.purchaseOrders)
                 if let i = store.purchaseOrders.firstIndex(where: { $0.id == po.id }) {
                     store.purchaseOrders[i].syncStatus = .synced
                 }
                 store.purchaseOrders.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                // Phase 2 Failed-Sync visibility (gap-fill alongside Wave 2):
+                // PO push was the one commercial push that didn't clear its
+                // sync error on success, so a stale "failed" reason could
+                // linger in the FailedSync UI after a successful retry.
+                await MainActor.run { store.clearSyncError(id: po.id) }
             } catch {
                 if let i = store.purchaseOrders.firstIndex(where: { $0.id == po.id }) {
                     store.purchaseOrders[i].syncStatus = .failed
                 }
+                // Phase 2 Failed-Sync visibility: capture per-row reason
+                // via SyncErrorMapper so PO push matches every other
+                // commercial push function.
+                await MainActor.run { store.recordSyncError(id: po.id, error: error) }
+                CrashReporter.capture(error: error, context: [
+                    "operation": "pushPendingPurchaseOrders",
+                    "po_id":      po.id.uuidString,
+                    "po_number":  po.poNumber
+                ])
             }
         }
         store.savePurchaseOrders()
@@ -1070,12 +1419,12 @@ extension SyncEngine {
                 let sort_order: Int
                 let company_id: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.productServices)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .order("sort_order")
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.productServices,
+                filters: [.eq("company_id", companyID.uuidString)],
+                orderBy: "sort_order"
+            )
 
             var merged = store.productServices.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -1131,7 +1480,7 @@ extension SyncEngine {
                     is_active:     ps.isActive,
                     sort_order:    ps.sortOrder
                 )
-                try await supabase.from(SupabaseTable.productServices).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.productServices)
                 if let i = store.productServices.firstIndex(where: { $0.id == ps.id }) {
                     store.productServices[i].syncStatus = .synced
                 }
@@ -1155,11 +1504,11 @@ extension SyncEngine {
                 let override_price: Double
                 let notes: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.clientPricings)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.clientPricings,
+                filters: [.eq("company_id", companyID.uuidString)]
+            )
 
             var merged = store.clientPricings.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -1205,7 +1554,7 @@ extension SyncEngine {
                     override_price:     toDouble(cp.overridePrice),
                     notes:              cp.notes
                 )
-                try await supabase.from(SupabaseTable.clientPricings).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.clientPricings)
                 if let i = store.clientPricings.firstIndex(where: { $0.id == cp.id }) {
                     store.clientPricings[i].syncStatus = .synced
                 }
@@ -1295,7 +1644,9 @@ extension SyncEngine {
                 if client.sites.isEmpty {
                     print("⚠️ pushPendingClients: \(client.name) has 0 sites locally — about to write empty sites_json. If you JUST added a site, something cleared client.sites between the add and this push.")
                 }
-                try await supabase.from(SupabaseTable.clients).upsert(row).execute()
+                // self.client to disambiguate from the `client` loop var
+                // (each iteration is `for client in pending`).
+                try await self.client.upsert(row, into: SupabaseTable.clients)
                 print("✅ pushPendingClients: \(client.name) synced (sites: \(client.sites.count))")
                 var updated = client; updated.syncStatus = .synced
                 store.upsertClientSynced(updated)
@@ -1363,12 +1714,13 @@ extension SyncEngine {
                 let sample_data_created_at: String?
                 let sample_data_created_by: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.estimates)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .order("created_at", ascending: false)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.estimates,
+                filters: [.eq("company_id", companyID.uuidString)],
+                orderBy: "created_at",
+                ascending: false
+            )
 
             var merged = store.estimates.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -1513,7 +1865,7 @@ extension SyncEngine {
                     sample_data_created_at:   est.sampleDataCreatedAt.map { isoFull.string(from: $0) },
                     sample_data_created_by:   est.sampleDataCreatedBy?.uuidString
                 )
-                try await supabase.from(SupabaseTable.estimates).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.estimates)
                 if let i = store.estimates.firstIndex(where: { $0.id == est.id }) {
                     store.estimates[i].syncStatus = .synced
                 }
@@ -1595,14 +1947,16 @@ extension SyncEngine {
                 let sample_data_created_at: String?
                 let sample_data_created_by: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.quotes)
-                .select()
-                .eq("company_id", value: companyID.uuidString)   // FIX: tenant isolation
-                .eq("is_deleted", value: false)
-                .order("quote_date", ascending: false)
-                .execute()
-                .value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.quotes,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ],
+                orderBy: "quote_date",
+                ascending: false
+            )
 
             // Include .failed so push-rejected quotes survive across pulls and
             // can be retried instead of silently disappearing.
@@ -1802,11 +2156,18 @@ extension SyncEngine {
                     sample_data_created_at:   q.sampleDataCreatedAt.map { isoFull.string(from: $0) },
                     sample_data_created_by:   q.sampleDataCreatedBy?.uuidString
                 )
-                try await supabase.from(SupabaseTable.quotes).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.quotes)
                 store.markQuoteSynced(id: q.id, status: .synced)
                 store.quotes.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: q.id) }
             } catch {
                 store.markQuoteSynced(id: q.id, status: .failed)
+                await MainActor.run { store.recordSyncError(id: q.id, error: error) }
+                CrashReporter.capture(error: error, context: [
+                    "operation": "pushPendingQuotes",
+                    "quote_id":     q.id.uuidString,
+                    "quote_number": q.jobNumber
+                ])
             }
         }
     }

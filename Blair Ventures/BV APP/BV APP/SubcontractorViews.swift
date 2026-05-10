@@ -22,18 +22,27 @@ struct SubcontractorListView: View {
     }
 
     var body: some View {
-        SubcontractorListBody(items: filtered, showCreate: $showCreate)
-            .navigationTitle("Subcontractors")
-            .searchable(text: $search, prompt: "Search by name or trade")
-            .refreshable { await store.refreshAll() }
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    if store.currentUserRole.canManageSubcontractors {
-                        Button { showCreate = true } label: { Image(systemName: "plus") }
-                    }
+        VStack(spacing: 0) {
+            // Phase 7 / Wave 2: First-launch sync gate.
+            if !store.hasCompletedFirstSync {
+                FirstLaunchSyncGateBanner()
+                    .padding(.horizontal)
+                    .padding(.top, 8)
+            }
+            SubcontractorListBody(items: filtered, showCreate: $showCreate)
+        }
+        .navigationTitle("Subcontractors")
+        .searchable(text: $search, prompt: "Search by name or trade")
+        .refreshable { await store.refreshAll() }
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                if store.currentUserRole.canManageSubcontractors {
+                    Button { showCreate = true } label: { Image(systemName: "plus") }
+                        .disabled(!store.hasCompletedFirstSync)
                 }
             }
-            .sheet(isPresented: $showCreate) { SubcontractorCreateEditView() }
+        }
+        .sheet(isPresented: $showCreate) { SubcontractorCreateEditView() }
     }
 }
 

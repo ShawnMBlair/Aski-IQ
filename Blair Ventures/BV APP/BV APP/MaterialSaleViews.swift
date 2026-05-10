@@ -30,6 +30,15 @@ struct MaterialSaleListView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
+                // Phase 7 first-launch sync gate. Material Sales reference
+                // clients + opportunities + (optionally) quotes — all
+                // server-resident.
+                if !store.hasCompletedFirstSync {
+                    FirstLaunchSyncGateBanner()
+                        .padding(.horizontal)
+                        .padding(.top, 8)
+                }
+
                 // Status filter bar
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
@@ -88,6 +97,7 @@ struct MaterialSaleListView: View {
                     Button { showCreate = true } label: {
                         Image(systemName: "plus")
                     }
+                    .disabled(!store.hasCompletedFirstSync)
                 }
             }
             .sheet(isPresented: $showCreate) {

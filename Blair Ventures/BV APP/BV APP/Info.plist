@@ -29,6 +29,10 @@
 	</dict>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Aski IQ uses your location to show current weather conditions on the dashboard and auto-fill weather data in field forms.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Aski IQ uses the camera to scan supplier receipts and quotes onto Material Requests, capture delivery-proof photos when receiving Purchase Orders, and attach photos to incident reports and daily job reports.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Aski IQ saves form attachments, delivery photos, and incident photos to your Photo Library when you choose to export them.</string>
 	<key>SENTRY_DSN</key>
 	<string>$(SENTRY_DSN)</string>
 	<key>SUPABASE_URL</key>

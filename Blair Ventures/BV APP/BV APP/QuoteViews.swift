@@ -354,16 +354,28 @@ extension AppStore {
         objectWillChange.send()
     }
 
+    /// Generate the next quote number. Phase 3 hardening: matches the
+    /// procurement / invoice pattern. Three guards on top of the
+    /// pre-existing parsed-max+1 logic:
+    ///   1. Soft-delete exclusion — soft-deleted quotes shouldn't burn
+    ///      their number; the partial unique index on the DB side
+    ///      (Phase 3 migration QUO1) only enforces uniqueness on live
+    ///      rows, so the local helper has to match.
+    ///   2. Company scope — multi-tenant local store can otherwise
+    ///      include other companies' quotes in the max calculation.
+    ///   3. Year filter via jobNumber prefix instead of createdAt —
+    ///      a quote drafted in late December and saved in early January
+    ///      has createdAt in year N but jobNumber for year N (since the
+    ///      prefix is set at draft time). Filtering by jobNumber prefix
+    ///      keeps the bookkeeping consistent with the issued number.
     func nextQuoteNumber() -> String {
         let year = Calendar.current.component(.year, from: Date())
-        // Count all quotes for this year regardless of sync state to avoid duplicates.
-        // Use the highest existing number and add 1 to handle out-of-order creation.
+        let yearPrefix = "Q-\(year)-"
         let existingNumbers = quotes
-            .filter { Calendar.current.component(.year, from: $0.createdAt) == year }
+            .filter { $0.companyID == currentCompanyID && !$0.isDeleted }
             .compactMap { q -> Int? in
-                // Parse trailing sequence number from "Q-2026-0042" → 42
-                guard q.jobNumber.hasPrefix("Q-") else { return nil }
-                return Int(q.jobNumber.components(separatedBy: "-").last ?? "")
+                guard q.jobNumber.hasPrefix(yearPrefix) else { return nil }
+                return Int(q.jobNumber.dropFirst(yearPrefix.count))
             }
         let next = (existingNumbers.max() ?? 0) + 1
         return String(format: "Q-%d-%04d", year, next)
@@ -535,35 +547,50 @@ struct QuoteListView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if filtered.isEmpty {
-                    VStack(spacing: 16) {
-                        Spacer()
-                        Image(systemName: "doc.richtext")
-                            .font(.system(size: 52))
-                            .foregroundColor(.secondary)
-                        Text("No quotes yet.")
-                            .font(.headline)
-                        Text("Create a quote from an existing estimate.")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                        Button("New Quote") { showCreate = true }
-                            .buttonStyle(.borderedProminent)
-                        Spacer()
-                    }
-                } else {
-                    List {
-                        ForEach(filtered) { quote in
-                            NavigationLink {
-                                QuoteDetailView(quote: quote)
-                            } label: {
-                                QuoteListRow(quote: quote)
+            VStack(spacing: 0) {
+                // Phase 2 first-launch sync gate (extended in Phase 7).
+                // A fresh-install user creating a quote before clients /
+                // estimates / opportunities pull would emit a record
+                // referencing nonexistent IDs, causing FK or RLS failures
+                // on push. Banner + disabled-create button reduces the
+                // class of "I created it but it won't sync" reports.
+                if !store.hasCompletedFirstSync {
+                    FirstLaunchSyncGateBanner()
+                        .padding(.horizontal)
+                        .padding(.top, 8)
+                }
+
+                Group {
+                    if filtered.isEmpty {
+                        VStack(spacing: 16) {
+                            Spacer()
+                            Image(systemName: "doc.richtext")
+                                .font(.system(size: 52))
+                                .foregroundColor(.secondary)
+                            Text("No quotes yet.")
+                                .font(.headline)
+                            Text("Create a quote from an existing estimate.")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
+                            Button("New Quote") { showCreate = true }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(!store.hasCompletedFirstSync)
+                            Spacer()
+                        }
+                    } else {
+                        List {
+                            ForEach(filtered) { quote in
+                                NavigationLink {
+                                    QuoteDetailView(quote: quote)
+                                } label: {
+                                    QuoteListRow(quote: quote)
+                                }
                             }
                         }
+                        .listStyle(.plain)
                     }
-                    .listStyle(.plain)
                 }
             }
             .searchable(text: $searchText, prompt: "Search quotes or clients")
@@ -574,6 +601,7 @@ struct QuoteListView: View {
                     Button { showCreate = true } label: {
                         Image(systemName: "plus")
                     }
+                    .disabled(!store.hasCompletedFirstSync)
                 }
             }
             .sheet(isPresented: $showCreate) {

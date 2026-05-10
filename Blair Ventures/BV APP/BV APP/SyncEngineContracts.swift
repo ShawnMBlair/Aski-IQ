@@ -53,13 +53,16 @@ extension SyncEngine {
                 let created_at, updated_at: String?
                 let last_modified_by: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.contracts)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .order("updated_at", ascending: false)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.contracts,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ],
+                orderBy: "updated_at",
+                ascending: false
+            )
 
             let isoFmt  = ISO8601DateFormatter()
             isoFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -230,15 +233,22 @@ extension SyncEngine {
                     created_at:             isoFmt.string(from: c.createdAt),
                     updated_at:             isoFmt.string(from: c.updatedAt)
                 )
-                try await supabase.from(SupabaseTable.contracts).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.contracts)
                 if let i = store.contracts.firstIndex(where: { $0.id == c.id }) {
                     store.contracts[i].syncStatus = .synced
                 }
                 store.contracts.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: c.id) }
             } catch {
                 if let i = store.contracts.firstIndex(where: { $0.id == c.id }) {
                     store.contracts[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: c.id, error: error) }
+                CrashReporter.capture(error: error, context: [
+                    "operation":       "pushPendingContracts",
+                    "contract_id":      c.id.uuidString,
+                    "contract_number":  c.contractNumber ?? ""
+                ])
             }
         }
     }
@@ -260,12 +270,14 @@ extension SyncEngine {
                 let is_deleted: Bool
                 let created_at: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.contractClauses)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.contractClauses,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ]
+            )
 
             let isoFmt = ISO8601DateFormatter()
             isoFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -338,7 +350,7 @@ extension SyncEngine {
                     is_deleted:       clause.isDeleted,
                     created_at:       isoFmt.string(from: clause.createdAt)
                 )
-                try await supabase.from(SupabaseTable.contractClauses).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.contractClauses)
                 if let i = store.contractClauses.firstIndex(where: { $0.id == clause.id }) {
                     store.contractClauses[i].syncStatus = .synced
                 }
@@ -369,12 +381,14 @@ extension SyncEngine {
                 let is_deleted: Bool
                 let created_at, updated_at: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.contractMilestones)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.contractMilestones,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ]
+            )
 
             let isoFmt  = ISO8601DateFormatter()
             isoFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -439,13 +453,16 @@ extension SyncEngine {
                 let is_deleted: Bool
                 let created_at, updated_at: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.complianceDocuments)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .order("expiry_date", ascending: true)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.complianceDocuments,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ],
+                orderBy: "expiry_date",
+                ascending: true
+            )
 
             let isoFmt  = ISO8601DateFormatter()
             isoFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -555,7 +572,7 @@ extension SyncEngine {
                     created_at:          isoFmt.string(from: d.createdAt),
                     updated_at:          isoFmt.string(from: d.updatedAt)
                 )
-                try await supabase.from(SupabaseTable.complianceDocuments).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.complianceDocuments)
                 if let i = store.complianceDocuments.firstIndex(where: { $0.id == d.id }) {
                     store.complianceDocuments[i].syncStatus = .synced
                 }
@@ -593,13 +610,16 @@ extension SyncEngine {
                 let created_at, updated_at: String?
                 let is_deleted: Bool
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.lienWaivers)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .order("requested_at", ascending: false)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.lienWaivers,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ],
+                orderBy: "requested_at",
+                ascending: false
+            )
 
             let isoFmt = ISO8601DateFormatter()
             isoFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -729,7 +749,7 @@ extension SyncEngine {
                     updated_at:          isoFmt.string(from: w.updatedAt),
                     is_deleted:          w.isDeleted
                 )
-                try await supabase.from(SupabaseTable.lienWaivers).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.lienWaivers)
                 if let i = store.lienWaivers.firstIndex(where: { $0.id == w.id }) {
                     store.lienWaivers[i].syncStatus = .synced
                 }
@@ -781,7 +801,7 @@ extension SyncEngine {
                     created_at:       isoFmt.string(from: m.createdAt),
                     updated_at:       isoFmt.string(from: m.updatedAt)
                 )
-                try await supabase.from(SupabaseTable.contractMilestones).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.contractMilestones)
                 if let i = store.contractMilestones.firstIndex(where: { $0.id == m.id }) {
                     store.contractMilestones[i].syncStatus = .synced
                 }

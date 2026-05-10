@@ -251,10 +251,26 @@ extension AppStore {
         rfis.filter { $0.isOverdue }
     }
 
+    /// Auto-generates a sequential RFI number scoped to the project.
+    /// Phase 3: parsed-max+1 over (projectID, companyID), excluding
+    /// soft-deleted. Mirrors ChangeOrder.nextCONumber. DB-side partial
+    /// unique index on (project_id, number) WHERE is_deleted = false
+    /// (RFI1 migration) catches cross-device races.
     func nextRFINumber(for projectID: UUID) -> String {
         let prefix = project(id: projectID)?.jobNumber ?? AppSettings.shared.companyPrefix
-        let count  = rfis.filter { $0.projectID == projectID }.count + 1
-        return "\(prefix)-RFI-\(String(format: "%03d", count))"
+        let rfiPrefix = "\(prefix)-RFI-"
+        let highest = rfis
+            .filter {
+                $0.projectID == projectID
+                    && $0.companyID == currentCompanyID
+                    && !$0.isDeleted
+            }
+            .compactMap { rfi -> Int? in
+                guard rfi.number.hasPrefix(rfiPrefix) else { return nil }
+                return Int(rfi.number.dropFirst(rfiPrefix.count))
+            }
+            .max() ?? 0
+        return "\(rfiPrefix)\(String(format: "%03d", highest + 1))"
     }
 
     // MARK: Persistence
