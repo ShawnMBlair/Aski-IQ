@@ -301,11 +301,31 @@ extension AppStore {
     }
 
     /// Auto-generates a sequential CO number scoped to the project.
+    /// Phase 3 hardening: replaces `count + 1` with parsed-max+1
+    /// scoped to (project, company), excluding soft-deleted rows. The
+    /// DB-side partial unique index on (project_id, number) WHERE
+    /// is_deleted = false catches any cross-device race.
+    ///
+    /// Why count+1 was wrong:
+    ///   1. count includes soft-deleted COs (re-issues deleted numbers)
+    ///   2. count includes other companies' COs on shared local store
+    ///   3. count doesn't survive cross-device offline edits
     func nextCONumber(for projectID: UUID) -> String {
         let prefix = project(id: projectID)?.jobNumber
             ?? AppSettings.shared.companyPrefix
-        let count = changeOrders.filter { $0.projectID == projectID }.count + 1
-        return "\(prefix)-CO-\(String(format: "%03d", count))"
+        let coPrefix = "\(prefix)-CO-"
+        let highest = changeOrders
+            .filter {
+                $0.projectID == projectID
+                    && $0.companyID == currentCompanyID
+                    && !$0.isDeleted
+            }
+            .compactMap { co -> Int? in
+                guard co.number.hasPrefix(coPrefix) else { return nil }
+                return Int(co.number.dropFirst(coPrefix.count))
+            }
+            .max() ?? 0
+        return "\(coPrefix)\(String(format: "%03d", highest + 1))"
     }
 
     // MARK: Persistence

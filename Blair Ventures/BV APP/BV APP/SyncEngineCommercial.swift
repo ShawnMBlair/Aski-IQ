@@ -189,10 +189,17 @@ extension SyncEngine {
                     store.changeOrders[i].syncStatus = .synced
                 }
                 store.changeOrders.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: co.id) }
             } catch {
                 if let i = store.changeOrders.firstIndex(where: { $0.id == co.id }) {
                     store.changeOrders[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: co.id, error: error) }
+                CrashReporter.capture(error: error, context: [
+                    "operation": "pushPendingChangeOrders",
+                    "co_id":     co.id.uuidString,
+                    "co_number": co.number
+                ])
             }
         }
         store.saveChangeOrders()
