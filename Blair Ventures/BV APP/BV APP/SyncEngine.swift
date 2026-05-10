@@ -369,19 +369,25 @@ final class SyncEngine: ObservableObject {
         // typically NULL on first push and updated on a follow-up cycle
         // after the quote lands; the serialization gate above ensures
         // the follow-up cycle runs after this one completes.
+        //
+        // material_sales also belongs here (not in step 6 like it used
+        // to) — it has an optional FK to quotes (`quote_id`), AND its
+        // child material_sale_terms RLS policy requires the parent
+        // material_sale to already exist server-side. The 2026-05-09
+        // Phase 4 audit caught a re-ordering bug where
+        // pushPendingMaterialSaleTerms ran BEFORE
+        // pushPendingMaterialSales, causing all material-sale-terms
+        // pushes to fail RLS even though the policy itself was correct.
+        // Fixed by moving material_sales push up next to quotes.
         await pushPendingEstimates()
         await pushPendingQuotes()
+        await pushPendingMaterialSales()
 
-        // 5. Sales nested — terms RLS requires parent quote/estimate
-        // server-side. Push AFTER 4. (These helpers were previously
-        // orphaned from the main cycle and only fired out-of-band on
-        // mutation, racing the parent's push.)
+        // 5. Sales nested — terms RLS requires parent quote / estimate /
+        // material_sale to exist server-side. Push AFTER step 4.
         await pushPendingEstimateTerms()
         await pushPendingQuoteTerms()
         await pushPendingMaterialSaleTerms()
-
-        // 6. Material sales path
-        await pushPendingMaterialSales()
 
         // 7. Project sub-entities
         await pushPendingChangeOrders()
