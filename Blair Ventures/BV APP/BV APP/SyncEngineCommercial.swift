@@ -611,10 +611,17 @@ extension SyncEngine {
                 if let i = store.subContracts.firstIndex(where: { $0.id == sc.id }) {
                     store.subContracts[i].syncStatus = .synced
                 }
+                await MainActor.run { store.clearSyncError(id: sc.id) }
             } catch {
                 if let i = store.subContracts.firstIndex(where: { $0.id == sc.id }) {
                     store.subContracts[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: sc.id, error: error) }
+                CrashReporter.capture(error: error, context: [
+                    "operation":           "pushPendingSubContracts",
+                    "subcontract_id":       sc.id.uuidString,
+                    "subcontract_number":   sc.contractNumber
+                ])
             }
         }
         store.saveSubContracts()

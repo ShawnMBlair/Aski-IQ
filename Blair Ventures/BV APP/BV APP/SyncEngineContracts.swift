@@ -235,10 +235,17 @@ extension SyncEngine {
                     store.contracts[i].syncStatus = .synced
                 }
                 store.contracts.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: c.id) }
             } catch {
                 if let i = store.contracts.firstIndex(where: { $0.id == c.id }) {
                     store.contracts[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: c.id, error: error) }
+                CrashReporter.capture(error: error, context: [
+                    "operation":       "pushPendingContracts",
+                    "contract_id":      c.id.uuidString,
+                    "contract_number":  c.contractNumber ?? ""
+                ])
             }
         }
     }

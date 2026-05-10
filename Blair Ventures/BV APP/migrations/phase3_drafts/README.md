@@ -18,8 +18,8 @@ Pattern (proven in procurement):
 | **Change Orders** | ✅ ChangeOrder.swift `nextCONumber` | ✅ `CO1_change_orders_number_partial_unique.sql` (per-project scope) | This PR |
 | **RFIs** | ✅ RFI.swift `nextRFINumber` | ✅ `RFI1_rfis_number_partial_unique.sql` (per-project scope) | This PR |
 | **Daily Job Reports** | ✅ DailyJobReport.swift `nextDJRNumber` | ⚠️ Blocked — see Schema Gaps below | This PR (Swift only) |
-| Contracts | ⏳ Pending | ⏳ Pending | — |
-| Sub-Contracts | ⏳ Pending | ⏳ Pending | — |
+| **Contracts** | ✅ ContractStore.swift `nextContractNumber` | ✅ `CON1_contracts_number_partial_unique.sql` | This PR |
+| **Sub-Contracts** | ✅ Subcontractor.swift `nextSubContractNumber` | ✅ `SC1_subcontracts_number_partial_unique.sql` | This PR |
 | RFIs | ⏳ Pending (per-project) | ⏳ Pending | — |
 | Material Sales | ⏳ Audit needed | ⏳ TBD | — |
 

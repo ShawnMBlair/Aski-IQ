@@ -352,7 +352,7 @@ extension AppStore {
         )
         c.id                 = UUID()
         c.companyID          = currentCompanyID
-        c.contractNumber     = "C-\(Calendar.current.component(.year, from: Date()))-\(String(format: "%03d", contracts.count + 1))"
+        c.contractNumber     = nextContractNumber()
         c.counterpartyType   = .subcontractor
         c.counterpartyID     = sc.subcontractorID
         c.counterpartyEmail  = sub?.email
@@ -417,11 +417,23 @@ extension AppStore {
         subContracts.filter { $0.status.isOpen }
     }
 
+    /// Auto-generates a sequential SubContract number scoped to
+    /// (company, year). Phase 3 hardening: parsed-max+1, excluding
+    /// soft-deleted. DB-side partial unique index on
+    /// (company_id, contract_number) WHERE is_deleted = false
+    /// (SC1 migration) catches cross-device races.
     func nextSubContractNumber() -> String {
         let prefix = AppSettings.shared.companyPrefix.isEmpty ? "BV" : AppSettings.shared.companyPrefix
         let year   = Calendar.current.component(.year, from: Date())
-        let count  = subContracts.count + 1
-        return "\(prefix)-SC-\(year)-\(String(format: "%03d", count))"
+        let yearPrefix = "\(prefix)-SC-\(year)-"
+        let highest = subContracts
+            .filter { $0.companyID == currentCompanyID && !$0.isDeleted }
+            .compactMap { sc -> Int? in
+                guard sc.contractNumber.hasPrefix(yearPrefix) else { return nil }
+                return Int(sc.contractNumber.dropFirst(yearPrefix.count))
+            }
+            .max() ?? 0
+        return "\(yearPrefix)\(String(format: "%03d", highest + 1))"
     }
 
     // MARK: Persistence
