@@ -83,7 +83,28 @@ But the **UX layer can still ALLOW the user to start a creation flow before they
 ## Recommended interventions (in design-decision order)
 
 **Decision 1: Free-floating top-level commercial creates — block, warn, or auto-route?**
-*Status: ⏳ Awaiting product input. Implementation deferred.*
+*Status: ✅ DONE 2026-05-10 (commits 73d5554 + 13c862a). Pattern: auto-route via single-sheet enum router.*
+
+What's now wired:
+
+| Entry point | Picker | Create-view param added |
+|---|---|---|
+| `QuoteListView` `+` | `RequiredEstimatePickerSheet` (Quote.estimateID is NOT NULL) | already `fromEstimate:` |
+| `InvoiceListView` `+` | `RequiredProjectPickerSheet` | `preselectedProjectID:` |
+| `ChangeOrderListView` `+` (non-scoped) | `RequiredProjectPickerSheet` | already `projectID:` (required) |
+| `RFIListView` `+` (non-scoped) | `RequiredProjectPickerSheet` | already `projectID:` (required) |
+| `ProjectListView` `+` | `RequiredOpportunityPickerSheet` | `preselectedOpportunityID:` |
+| `MaterialSaleListView` `+` | `CommercialIntakeView` (workType prefilled) | already `context:` |
+| `EstimateListView` `+` | `CommercialIntakeView` (no prefill) | already `context:` |
+| `ProjectSubContractListView` `+` (project-scoped) | `RequiredSubcontractorPickerSheet` | added `preselectedProjectID:` |
+| `SubcontractorListView` `+` | n/a — creates vendor record, top-level resource | n/a |
+
+`ParentPickerSheet.swift` contains the three callback-style pickers
+(`RequiredProjectPickerSheet`, `RequiredOpportunityPickerSheet`,
+`RequiredEstimatePickerSheet`, plus `RequiredSubcontractorPickerSheet`
+for the SubContract follow-up). Project-scoped list variants
+(CO/RFI/SubContract nested under Project Detail) skip the picker and
+route straight to `.create(pid)`.
 
 Three patterns exist in the app today:
 - **Block:** Hide the `+` button entirely; users must navigate from the parent (Opportunity / Project / Client). Highest enforcement, lowest UX flexibility.
@@ -113,15 +134,15 @@ What's already wired in `MRCreateEditView` (`ProcurementViews.swift:1329+`):
 
 The audit pre-dated this validation suite landing.
 
-## Implementation effort estimate (updated 2026-05-10)
+## Implementation effort estimate (final 2026-05-10)
 
 | Decision | Original estimate | Actual status |
 |---|---|---|
-| Decision 1 / Auto-route | ~4 hours | ⏳ Deferred — awaiting product confirmation on block / warn / auto-route per entity class. |
+| Decision 1 / Auto-route | ~4 hours | ✅ Done — 8 entries wired via `ParentPickerSheet` + `CommercialIntakeView`. Commits 73d5554 + 13c862a. |
 | Decision 2 / Auto-create placeholder Opportunity | ~1 hour | ✅ Done at data layer via `ensureCRMLink`. Toast banner deferred (~15 min when revisited). |
 | Decision 3 / MR Save-button disable | ~30 minutes | ✅ Done — `canSave` gate already covered destination validity. |
 
-Net: 2 of 3 decisions closed; Decision 1 is the only outstanding implementation work and it depends on product input for the per-entity pattern.
+Net: All 3 decisions closed. Phase 7 / orphan-record prevention complete.
 
 ## What this audit does NOT cover
 
@@ -132,8 +153,8 @@ Net: 2 of 3 decisions closed; Decision 1 is the only outstanding implementation 
 
 ## Next session
 
-Decisions 2 + 3 are closed. The only remaining work is Decision 1, which is product-design dependent. When you're ready:
+All three decisions are closed. No outstanding orphan-prevention work in Phase 7.
 
-1. Confirm per-entity routing pattern (block / warn / auto-route) for the 7 free-floating commercial creates.
-2. Tell me which subset to implement first (e.g., "auto-route Invoice + ChangeOrder + RFI through Project picker — leave the rest alone").
-3. I'll wire it across the relevant views — pattern is the same as `CommercialIntakeView` (parent picker sheet before the create form).
+Open follow-ups (not gating):
+- Toast banner on auto-Opportunity create (Decision 2 nice-to-have — ~15 min).
+- Test coverage for the picker flows. ViewInspector / UI tests aren't wired in BV APPTests yet; for now coverage is end-to-end build-time + manual smoke.
