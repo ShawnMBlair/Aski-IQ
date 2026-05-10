@@ -455,6 +455,24 @@ extension AppStore {
         guard requireRole([.fieldWorker, .foreman, .projectManager, .officeAdmin, .manager, .executive],
                           action: "submit_material_request") else { return }
         guard let idx = materialRequests.firstIndex(where: { $0.id == request.id }) else { return }
+
+        // Phase 8 / Inventory v1 — INVENTORY HOOK
+        // Before transitioning to .submitted, check if any line items
+        // already exist in inventory. Surface a toast suggesting "Use
+        // Inventory Transfer instead of buying new" so the user can
+        // cancel + create a transfer if appropriate. Non-blocking —
+        // the submission still proceeds. The MaterialRequestEditorView
+        // can also display the same hint pre-submission via the same
+        // helper (`availableInventoryFor(materialRequest:)`).
+        let availability = availableInventoryFor(materialRequest: request)
+        if !availability.isEmpty {
+            let lineNames = availability.keys.sorted().joined(separator: ", ")
+            let totalLines = availability.values.flatMap { $0 }.count
+            ToastService.shared.info(
+                "\(totalLines) of these items are in stock (\(lineNames)) — consider an inventory transfer instead."
+            )
+        }
+
         var updated = request
         updated.status         = .submitted
         updated.submittedByID  = currentUser?.id

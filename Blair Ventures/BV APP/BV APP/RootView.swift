@@ -291,6 +291,20 @@ private struct MoreEquipmentSection: View {
                              count: store.equipmentNeedingService.count + store.equipmentWithExpiringInspections.count,
                              color: .orange)
             }
+            // Phase 8 / Inventory v1 — entry point. No badge today; v2
+            // will surface low-stock warnings here.
+            NavigationLink(destination: InventoryListView()) {
+                MoreBadgeRow(label: "Inventory", icon: "shippingbox",
+                             count: 0, color: .blue)
+            }
+            NavigationLink(destination: StockLocationListView()) {
+                MoreBadgeRow(label: "Stock Locations", icon: "mappin.and.ellipse",
+                             count: 0, color: .secondary)
+            }
+            NavigationLink(destination: InventoryTransfersHistoryView()) {
+                MoreBadgeRow(label: "Inventory Movements", icon: "arrow.left.arrow.right",
+                             count: 0, color: .secondary)
+            }
         }
     }
 }

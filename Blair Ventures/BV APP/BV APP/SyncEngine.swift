@@ -111,6 +111,13 @@ final class SyncEngine: ObservableObject {
         await pullClients(role: role)
         await pullDJRs(userID: userID, role: role)
         await pullEquipment()
+        // Phase 8 / Inventory v1 — pull the 4 inventory tables. Order:
+        // items → locations → stock_levels → transfers (transfers FK
+        // to items + locations).
+        await pullInventoryItems()
+        await pullStockLocations()
+        await pullStockLevels()
+        await pullInventoryTransfers()
         await pullChangeOrders(role: role)
         await pullRFIs(role: role)
         await pullProjectBudgets(role: role)
