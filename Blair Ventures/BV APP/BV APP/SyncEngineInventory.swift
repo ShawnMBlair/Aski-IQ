@@ -30,6 +30,13 @@ extension SyncEngine {
                 let product_service_id: String?
                 let default_location_id: String?
                 let standard_cost: Decimal?
+                /// Phase 8 / Inventory v2 — both fields optional so pulls
+                /// against pre-INV2 branches (or projects where the
+                /// migration hasn't applied yet) still decode cleanly.
+                /// Postgrest omits absent columns from the JSON payload,
+                /// which Decodable maps to `nil` for Optional types.
+                let reorder_point: Decimal?
+                let reorder_quantity: Decimal?
                 let is_active: Bool
                 let created_at, updated_at: String?
                 let last_modified_by: String?
@@ -54,16 +61,18 @@ extension SyncEngine {
                 guard let id = UUID(uuidString: row.id),
                       let cid = UUID(uuidString: row.company_id) else { return nil }
                 var item = InventoryItem(sku: row.sku, name: row.name, unit: row.unit)
-                item.id           = id
-                item.companyID    = cid
-                item.description  = row.description ?? ""
-                item.costCode     = row.cost_code
-                item.notes        = row.notes ?? ""
+                item.id              = id
+                item.companyID       = cid
+                item.description     = row.description ?? ""
+                item.costCode        = row.cost_code
+                item.notes           = row.notes ?? ""
                 item.productServiceID  = row.product_service_id.flatMap(UUID.init(uuidString:))
                 item.defaultLocationID = row.default_location_id.flatMap(UUID.init(uuidString:))
-                item.standardCost = row.standard_cost
-                item.isActive     = row.is_active
-                item.syncStatus   = .synced
+                item.standardCost    = row.standard_cost
+                item.reorderPoint    = row.reorder_point
+                item.reorderQuantity = row.reorder_quantity
+                item.isActive        = row.is_active
+                item.syncStatus      = .synced
                 return item
             }
 
@@ -87,6 +96,15 @@ extension SyncEngine {
                     let description, notes: String?
                     let product_service_id, default_location_id: String?
                     let standard_cost: Decimal?
+                    /// Phase 8 / Inventory v2 — pushed alongside the other
+                    /// item fields. INV2 migration must be applied to
+                    /// prod before this build ships, or the upsert
+                    /// returns 42703 ("column does not exist"). Both
+                    /// fields are nullable on the server side so we can
+                    /// emit `null` for items without a configured
+                    /// threshold (the common case for v1-imported rows).
+                    let reorder_point: Decimal?
+                    let reorder_quantity: Decimal?
                     let is_active, is_deleted: Bool
                     let deleted_at, deleted_by: String?
                 }
@@ -102,6 +120,8 @@ extension SyncEngine {
                     product_service_id: item.productServiceID?.uuidString,
                     default_location_id: item.defaultLocationID?.uuidString,
                     standard_cost:      item.standardCost,
+                    reorder_point:      item.reorderPoint,
+                    reorder_quantity:   item.reorderQuantity,
                     is_active:          item.isActive,
                     is_deleted:         item.isDeleted,
                     deleted_at:         item.deletedAt.map { _invIsoFull.string(from: $0) },

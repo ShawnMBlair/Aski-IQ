@@ -38,6 +38,17 @@ struct InventoryItem: Identifiable, Codable, Equatable, BaseModel {
     // valuation lives on the stock_level row).
     var standardCost: Decimal? = nil
 
+    /// Phase 8 / Inventory v2 — reorder threshold. When `totalQuantityOnHand`
+    /// drops below this value, the item flags as low-stock in the
+    /// dashboard widget + AI assistant context. NULL means no threshold
+    /// configured; the AI falls back to v1's "qty ≤ 0" heuristic.
+    var reorderPoint: Decimal? = nil
+
+    /// Phase 8 / Inventory v2 — suggested reorder quantity. Used by the
+    /// suggested-PO sheet in v2.1; today it's display-only on the
+    /// item detail screen. NULL means no suggestion.
+    var reorderQuantity: Decimal? = nil
+
     var isActive: Bool = true
 
     // BaseModel boilerplate

@@ -580,12 +580,11 @@ struct AIChatView: View {
         if !pendingMRs.isEmpty {
             prompts.append("What material requests are awaiting approval?")
         }
-        let outOfStockItems = store.inventoryItems.filter { item in
-            !item.isDeleted && item.isActive
-                && store.totalQuantityOnHand(itemID: item.id) <= 0
-        }
-        if !outOfStockItems.isEmpty {
-            prompts.append("Which inventory items are out of stock?")
+        // Phase 8 / Inventory v2 — switched to reorder-point-aware
+        // detection. Surfaces items BEFORE they hit zero so the user
+        // can act ahead of a stockout.
+        if !store.lowStockItems.isEmpty {
+            prompts.append("Which inventory items are running low?")
         }
         prompts.append("Which crews are on site today?")
         prompts.append("Give me a project status overview")
@@ -791,14 +790,13 @@ extension AppStore {
             lines.append("Pending MRs: \(preview)")
         }
 
-        // Phase 8 / Inventory v1 — surface stock state in the AI context
+        // Phase 8 / Inventory v2 — low-stock detection via per-item
+        // reorder threshold (with v1 qty≤0 fallback for items without
+        // a configured point). Replaces the v1 "out of stock" line
+        // with a richer "low stock at threshold" signal so the AI can
+        // surface items BEFORE they hit zero.
         let activeItems = inventoryItems.filter { !$0.isDeleted && $0.isActive }
-        let lowStockItems = activeItems.filter { item in
-            // "Low stock" heuristic for v1: any active item whose total
-            // qty-on-hand has dropped to 0. v2 will add per-item
-            // reorder thresholds and replace this rule.
-            totalQuantityOnHand(itemID: item.id) <= 0
-        }
+        let lowStock = lowStockItems
         let totalStockValue: Decimal = inventoryStockLevels
             .filter { !$0.isDeleted }
             .reduce(0) { acc, level in
@@ -809,9 +807,19 @@ extension AppStore {
             "",
             "=== INVENTORY ===",
             "Catalog: \(activeItems.count) active items across \(activeStockLocations.count) locations",
-            "Items currently out of stock: \(lowStockItems.count)",
+            "Items at or below reorder point: \(lowStock.count) of \(activeItems.count)",
             "Estimated stock value: \(totalStockValue.currencyString)",
         ]
+        if !lowStock.isEmpty {
+            let preview = lowStock.prefix(5).map { item -> String in
+                let onHand = totalQuantityOnHand(itemID: item.id)
+                if let rp = item.reorderPoint {
+                    return "\(item.name) (\(onHand)/\(rp) \(item.unit))"
+                }
+                return "\(item.name) (\(onHand) \(item.unit))"
+            }.joined(separator: ", ")
+            lines.append("Low stock: \(preview)")
+        }
         if !recentTransfers.isEmpty {
             lines.append("Recent movements (\(recentTransfers.count)):")
             for t in recentTransfers {
