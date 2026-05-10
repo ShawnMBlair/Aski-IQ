@@ -741,10 +741,17 @@ extension SyncEngine {
                     store.invoices[i].syncStatus = .synced
                 }
                 store.invoices.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: inv.id) }
             } catch {
                 if let i = store.invoices.firstIndex(where: { $0.id == inv.id }) {
                     store.invoices[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: inv.id, error: error) }
+                CrashReporter.capture(error: error, context: [
+                    "operation": "pushPendingInvoices",
+                    "invoice_id":     inv.id.uuidString,
+                    "invoice_number": inv.invoiceNumber
+                ])
             }
         }
         store.saveInvoices()

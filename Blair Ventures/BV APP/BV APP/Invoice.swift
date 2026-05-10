@@ -448,11 +448,32 @@ extension AppStore {
         openInvoices.reduce(0) { $0 + $1.balanceDue }
     }
 
+    /// Generate the next invoice number. Uses parsed-max+1 scoped to the
+    /// current (company, year), excluding soft-deleted rows. Mirrors the
+    /// procurement pattern (Procurement.swift). The DB-side migration
+    /// `material_requests_company_request_number_unique`-style partial
+    /// unique index on (company_id, invoice_number) WHERE is_deleted=false
+    /// catches any cross-device race that slips past this calculation;
+    /// sync engine retries with the next number on conflict.
+    ///
+    /// Reasons this replaces the prior `invoices.count + 1` form:
+    ///   1. count includes soft-deleted rows, so deleting then creating
+    ///      could re-issue a deleted row's number.
+    ///   2. count doesn't reset across years.
+    ///   3. count includes other companies' rows when multiple tenants
+    ///      share a local store cache.
     func nextInvoiceNumber() -> String {
         let prefix = AppSettings.shared.companyPrefix.isEmpty ? "BV" : AppSettings.shared.companyPrefix
         let year   = Calendar.current.component(.year, from: Date())
-        let next   = invoices.count + 1
-        return "\(prefix)-INV-\(year)-\(String(format: "%04d", next))"
+        let yearPrefix = "\(prefix)-INV-\(year)-"
+        let highest = invoices
+            .filter { $0.companyID == currentCompanyID && !$0.isDeleted }
+            .compactMap { inv -> Int? in
+                guard inv.invoiceNumber.hasPrefix(yearPrefix) else { return nil }
+                return Int(inv.invoiceNumber.dropFirst(yearPrefix.count))
+            }
+            .max() ?? 0
+        return "\(yearPrefix)\(String(format: "%04d", highest + 1))"
     }
 
     // MARK: Persistence
