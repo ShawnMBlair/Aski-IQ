@@ -53,13 +53,16 @@ extension SyncEngine {
                 let created_at, updated_at: String?
                 let last_modified_by: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.contracts)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .order("updated_at", ascending: false)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.contracts,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ],
+                orderBy: "updated_at",
+                ascending: false
+            )
 
             let isoFmt  = ISO8601DateFormatter()
             isoFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -267,12 +270,14 @@ extension SyncEngine {
                 let is_deleted: Bool
                 let created_at: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.contractClauses)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.contractClauses,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ]
+            )
 
             let isoFmt = ISO8601DateFormatter()
             isoFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -376,12 +381,14 @@ extension SyncEngine {
                 let is_deleted: Bool
                 let created_at, updated_at: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.contractMilestones)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.contractMilestones,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ]
+            )
 
             let isoFmt  = ISO8601DateFormatter()
             isoFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -446,13 +453,16 @@ extension SyncEngine {
                 let is_deleted: Bool
                 let created_at, updated_at: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.complianceDocuments)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .order("expiry_date", ascending: true)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.complianceDocuments,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ],
+                orderBy: "expiry_date",
+                ascending: true
+            )
 
             let isoFmt  = ISO8601DateFormatter()
             isoFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -600,13 +610,16 @@ extension SyncEngine {
                 let created_at, updated_at: String?
                 let is_deleted: Bool
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.lienWaivers)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .order("requested_at", ascending: false)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.lienWaivers,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ],
+                orderBy: "requested_at",
+                ascending: false
+            )
 
             let isoFmt = ISO8601DateFormatter()
             isoFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

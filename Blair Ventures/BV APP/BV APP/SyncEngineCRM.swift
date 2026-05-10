@@ -96,14 +96,15 @@ extension SyncEngine {
                 let created_at: String?
                 let sync_status: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.crmContacts)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .order("last_name")
-                .execute()
-                .value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.crmContacts,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ],
+                orderBy: "last_name"
+            )
 
             // Preserve .failed records too — otherwise records that hit a transient
             // server-side error get silently dropped on every pullAll, costing the
@@ -199,14 +200,16 @@ extension SyncEngine {
                 let sample_data_created_at: String?
                 let sample_data_created_by: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.crmOpportunities)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .order("updated_at", ascending: false)
-                .execute()
-                .value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.crmOpportunities,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ],
+                orderBy: "updated_at",
+                ascending: false
+            )
 
             var merged = store.crmOpportunities.filter {
                 $0.syncStatus == .local || $0.syncStatus == .pending || $0.syncStatus == .failed
@@ -330,18 +333,21 @@ extension SyncEngine {
                     case client_id, contact_id, opportunity_id, quote_id, project_id, assigned_to_id
                 }
             }
-            var query = supabase.from(SupabaseTable.crmTasks)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
+            var filters: [SyncFilter] = [
+                .eq("company_id", companyID.uuidString),
+                .eq("is_deleted", false)
+            ]
             if role.isFieldRole, let userID = store.currentUser?.id {
-                query = query.eq("assigned_to_id", value: userID.uuidString)
+                filters.append(.eq("assigned_to_id", userID.uuidString))
             }
-            let rows: [Row] = try await query
-                .eq("is_deleted", value: false)
-                .order("created_at", ascending: false)
-                .limit(300)
-                .execute()
-                .value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.crmTasks,
+                filters: filters,
+                orderBy: "created_at",
+                ascending: false,
+                limit: 300
+            )
 
             var merged = store.crmTasks.filter {
                 $0.syncStatus == .local || $0.syncStatus == .pending || $0.syncStatus == .failed
@@ -448,14 +454,14 @@ extension SyncEngine {
                     case client_id, contact_id, opportunity_id, quote_id, project_id
                 }
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.crmActivities)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .order("date", ascending: false)
-                .limit(200)
-                .execute()
-                .value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.crmActivities,
+                filters: [.eq("company_id", companyID.uuidString)],
+                orderBy: "date",
+                ascending: false,
+                limit: 200
+            )
 
             // Merge server records — keep local ones, add/update server ones
             var merged = store.crmActivities.filter {
@@ -532,12 +538,11 @@ extension SyncEngine {
                 let is_done: Bool?
                 let opportunity_id, project_id: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.crmChecklists)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .execute()
-                .value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.crmChecklists,
+                filters: [.eq("company_id", companyID.uuidString)]
+            )
 
             var merged = store.handoffChecklists.filter { _ in false }  // full replace from server
             for row in rows {

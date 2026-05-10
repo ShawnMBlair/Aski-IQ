@@ -36,6 +36,7 @@ final class FakeSyncClient: AskiSyncClient {
         let filters: [SyncFilter]
         let orderBy: String?
         let ascending: Bool
+        let limit: Int?
     }
     private(set) var selects: [SelectCall] = []
 
@@ -77,15 +78,19 @@ final class FakeSyncClient: AskiSyncClient {
         from table: String,
         filters: [SyncFilter],
         orderBy: String?,
-        ascending: Bool
+        ascending: Bool,
+        limit: Int?
     ) async throws -> [T] {
         if let err = nextSelectError {
             nextSelectError = nil
             throw err
         }
-        selects.append(.init(table: table, filters: filters, orderBy: orderBy, ascending: ascending))
+        selects.append(.init(table: table, filters: filters,
+                             orderBy: orderBy, ascending: ascending, limit: limit))
         guard let canned = cannedSelect[table] else { return [] }
-        return canned.compactMap { $0 as? T }
+        let typed = canned.compactMap { $0 as? T }
+        if let limit { return Array(typed.prefix(limit)) }
+        return typed
     }
 }
 

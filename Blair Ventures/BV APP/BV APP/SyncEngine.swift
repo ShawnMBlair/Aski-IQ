@@ -520,14 +520,16 @@ final class SyncEngine: ObservableObject {
                     case sampleDataCreatedBy   = "sample_data_created_by"
                 }
             }
-            let rows: [ProjectRow] = try await supabase
-                .from(SupabaseTable.projects)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .order("name")
-                .execute()
-                .value
+            let rows: [ProjectRow] = try await client.select(
+                ProjectRow.self,
+                from: SupabaseTable.projects,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ],
+                orderBy: "name",
+                ascending: true
+            )
 
             store.projects = rows.map { row in
                 var p = Project(name: row.name, clientName: row.clientName)
@@ -717,13 +719,14 @@ final class SyncEngine: ObservableObject {
                     case sampleDataCreatedBy   = "sample_data_created_by"
                 }
             }
-            let rows: [EmployeeRow] = try await supabase
-                .from(SupabaseTable.employees)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_active", value: true)
-                .execute()
-                .value
+            let rows: [EmployeeRow] = try await client.select(
+                EmployeeRow.self,
+                from: SupabaseTable.employees,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_active", true)
+                ]
+            )
 
             store.employees = rows.map { row in
                 var e = Employee(firstName: row.firstName, lastName: row.lastName)
@@ -768,13 +771,14 @@ final class SyncEngine: ObservableObject {
                     case companyId = "company_id"
                 }
             }
-            let rows: [CrewRow] = try await supabase
-                .from(SupabaseTable.crews)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_active", value: true)
-                .execute()
-                .value
+            let rows: [CrewRow] = try await client.select(
+                CrewRow.self,
+                from: SupabaseTable.crews,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_active", true)
+                ]
+            )
 
             store.crews = rows.map { row in
                 var c = Crew(name: row.name)
@@ -818,20 +822,19 @@ final class SyncEngine: ObservableObject {
                 }
             }
 
-            var query = supabase
-                .from(SupabaseTable.timesheetEntries)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-
+            var filters: [SyncFilter] = [.eq("company_id", companyID.uuidString)]
             if role == .fieldWorker {
-                query = query.eq("employee_id", value: userID.uuidString)
+                filters.append(.eq("employee_id", userID.uuidString))
             }
 
-            let rows: [TimesheetRow] = try await query
-                .order("work_date", ascending: false)
-                .limit(500)
-                .execute()
-                .value
+            let rows: [TimesheetRow] = try await client.select(
+                TimesheetRow.self,
+                from: SupabaseTable.timesheetEntries,
+                filters: filters,
+                orderBy: "work_date",
+                ascending: false,
+                limit: 500
+            )
 
             store.timesheetEntries = rows.map { row in
                 let parsedDate = _syncDateFormatter.date(from: row.workDate) ?? Date()
@@ -878,13 +881,14 @@ final class SyncEngine: ObservableObject {
                     case companyId           = "company_id"
                 }
             }
-            let rows: [TemplateRow] = try await supabase
-                .from(SupabaseTable.formTemplates)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_active", value: true)
-                .execute()
-                .value
+            let rows: [TemplateRow] = try await client.select(
+                TemplateRow.self,
+                from: SupabaseTable.formTemplates,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_active", true)
+                ]
+            )
 
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
@@ -962,21 +966,20 @@ final class SyncEngine: ObservableObject {
                 }
             }
 
-            var query = supabase
-                .from(SupabaseTable.formSubmissions)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-
+            var filters: [SyncFilter] = [.eq("company_id", companyID.uuidString)]
             // Field workers only see their own submissions — filter by user UUID, not name
             if role == .fieldWorker {
-                query = query.eq("user_id", value: userID.uuidString)
+                filters.append(.eq("user_id", userID.uuidString))
             }
 
-            let rows: [SubmissionRow] = try await query
-                .order("created_at", ascending: false)
-                .limit(500)
-                .execute()
-                .value
+            let rows: [SubmissionRow] = try await client.select(
+                SubmissionRow.self,
+                from: SupabaseTable.formSubmissions,
+                filters: filters,
+                orderBy: "created_at",
+                ascending: false,
+                limit: 500
+            )
 
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
@@ -1355,14 +1358,14 @@ final class SyncEngine: ObservableObject {
             let company_id:    String?
         }
         do {
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.auditSnapshots)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .order("created_at", ascending: false)
-                .limit(limit)
-                .execute()
-                .value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.auditSnapshots,
+                filters: [.eq("company_id", companyID.uuidString)],
+                orderBy: "created_at",
+                ascending: false,
+                limit: limit
+            )
             let iso = ISO8601DateFormatter()
             iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
             let isoFallback = ISO8601DateFormatter()
@@ -1466,14 +1469,14 @@ final class SyncEngine: ObservableObject {
                 let snapshot_json: String
                 let company_id: String
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.auditSnapshots)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .order("created_at", ascending: false)
-                .limit(500)
-                .execute()
-                .value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.auditSnapshots,
+                filters: [.eq("company_id", companyID.uuidString)],
+                orderBy: "created_at",
+                ascending: false,
+                limit: 500
+            )
 
             let iso = ISO8601DateFormatter()
             iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -1634,15 +1637,17 @@ final class SyncEngine: ObservableObject {
                 let completed_at: String?
                 let tab_summary: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.importBatches)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .order("created_at", ascending: false)
-                .limit(200)
-                .execute()
-                .value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.importBatches,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ],
+                orderBy: "created_at",
+                ascending: false,
+                limit: 200
+            )
 
             let iso = ISO8601DateFormatter()
             iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -1997,12 +2002,14 @@ final class SyncEngine: ObservableObject {
                 let assigned_worker_ids: [String]?
                 let foreman_id: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.scheduleEntries)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.scheduleEntries,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ]
+            )
 
             // Include .failed so push-rejected entries survive across pulls.
             var merged = store.scheduleEntries.filter {
@@ -2248,12 +2255,11 @@ final class SyncEngine: ObservableObject {
                 let updated_at: String?
             }
 
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.scheduleRecommendations)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .execute()
-                .value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.scheduleRecommendations,
+                filters: [.eq("company_id", companyID.uuidString)]
+            )
 
             // Same merge strategy as schedule_entries: keep local
             // pending/local/failed records so in-flight edits aren't
@@ -2443,12 +2449,14 @@ final class SyncEngine: ObservableObject {
                 let description: String?; let created_at: String
                 let company_id: String?
             }
-            let rows: [IncidentRow] = try await supabase
-                .from(SupabaseTable.incidents)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .execute().value
+            let rows: [IncidentRow] = try await client.select(
+                IncidentRow.self,
+                from: SupabaseTable.incidents,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ]
+            )
 
             // ── Replace strategy ────────────────────────────────────────────
             // Build the authoritative list from Supabase, preserving any local
@@ -2544,12 +2552,14 @@ final class SyncEngine: ObservableObject {
                 let issuer: String?; let expiry_date: String?
                 let company_id: String?
             }
-            let rows: [CertRow] = try await supabase
-                .from(SupabaseTable.certificates)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .execute().value
+            let rows: [CertRow] = try await client.select(
+                CertRow.self,
+                from: SupabaseTable.certificates,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ]
+            )
 
             for row in rows {
                 guard let uuid = UUID(uuidString: row.id),
@@ -2629,11 +2639,11 @@ final class SyncEngine: ObservableObject {
                 let sample_data_created_at: String?
                 let sample_data_created_by: String?
             }
-            let rows: [ClientRow] = try await supabase
-                .from(SupabaseTable.clients)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .execute().value
+            let rows: [ClientRow] = try await client.select(
+                ClientRow.self,
+                from: SupabaseTable.clients,
+                filters: [.eq("company_id", companyID.uuidString)]
+            )
 
             for row in rows {
                 guard let uuid = UUID(uuidString: row.id) else { continue }
@@ -2781,12 +2791,14 @@ final class SyncEngine: ObservableObject {
                 let serial_number: String?; let make: String?; let model: String?
                 let company_id: String?
             }
-            let rows: [EquipRow] = try await supabase
-                .from(SupabaseTable.equipment)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .execute().value
+            let rows: [EquipRow] = try await client.select(
+                EquipRow.self,
+                from: SupabaseTable.equipment,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ]
+            )
 
             for row in rows {
                 guard let uuid = UUID(uuidString: row.id),
@@ -2849,12 +2861,11 @@ final class SyncEngine: ObservableObject {
     private func pullCostCodes() async {
         guard let companyID = store.currentCompanyID else { return }
         do {
-            let rows: [CostCodeRow] = try await supabase
-                .from(SupabaseTable.companyCostCodes)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .execute()
-                .value
+            let rows: [CostCodeRow] = try await client.select(
+                CostCodeRow.self,
+                from: SupabaseTable.companyCostCodes,
+                filters: [.eq("company_id", companyID.uuidString)]
+            )
             let codes = rows.map { r -> CompanyCostCode in
                 var c = CompanyCostCode(
                     companyID:   companyID,
@@ -2954,13 +2965,16 @@ final class SyncEngine: ObservableObject {
                 /// accept_material_sale_via_token RPC. Pull-only.
                 let accepted_at: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.materialSales)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .order("created_at", ascending: false)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.materialSales,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ],
+                orderBy: "created_at",
+                ascending: false
+            )
 
             let isoFmt = ISO8601DateFormatter()
             isoFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

@@ -95,13 +95,14 @@ extension SyncEngine {
                 let created_at:      String
                 let updated_at:      String
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.workflowRules)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .execute()
-                .value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.workflowRules,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ]
+            )
 
             // Preserve any locally-pending edits — don't clobber rows
             // the user just saved that haven't pushed yet.
@@ -249,15 +250,17 @@ extension SyncEngine {
             }
             // Cap to 500 most recent — matches the in-memory cap so
             // we don't drag down a year's worth of fires on every pull.
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.workflowLog)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .order("fired_at", ascending: false)
-                .limit(500)
-                .execute()
-                .value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.workflowLog,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ],
+                orderBy: "fired_at",
+                ascending: false,
+                limit: 500
+            )
 
             let iso = ISO8601DateFormatter()
             iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

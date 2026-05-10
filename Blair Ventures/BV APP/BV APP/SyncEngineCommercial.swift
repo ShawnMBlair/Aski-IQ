@@ -84,12 +84,14 @@ extension SyncEngine {
                 let sample_data_created_at: String?
                 let sample_data_created_by: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.changeOrders)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.changeOrders,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ]
+            )
 
             var merged = store.changeOrders.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -221,12 +223,14 @@ extension SyncEngine {
                 let has_cost_impact, has_schedule_impact: Bool
                 let required_by_date, submitted_date, answered_date: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.rfis)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.rfis,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ]
+            )
 
             var merged = store.rfis.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -339,11 +343,11 @@ extension SyncEngine {
                 let original_contract_value, contingency_amount: Double
                 let lines_json: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.projectBudgets)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.projectBudgets,
+                filters: [.eq("company_id", companyID.uuidString)]
+            )
 
             var merged = store.projectBudgets.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -420,11 +424,11 @@ extension SyncEngine {
                 let rating: Int?
                 let notes: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.subcontractors)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.subcontractors,
+                filters: [.eq("company_id", companyID.uuidString)]
+            )
 
             var merged = store.subcontractors.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -532,11 +536,11 @@ extension SyncEngine {
                 /// Contract row when this SubContract has been promoted.
                 let linked_contract_id: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.subContracts)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.subContracts,
+                filters: [.eq("company_id", companyID.uuidString)]
+            )
 
             var merged = store.subContracts.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -653,14 +657,17 @@ extension SyncEngine {
                 /// default 'USD'.
                 let currency: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.invoices)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .order("created_at", ascending: false)
-                .limit(200)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.invoices,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ],
+                orderBy: "created_at",
+                ascending: false,
+                limit: 200
+            )
 
             var merged = store.invoices.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -820,12 +827,13 @@ extension SyncEngine {
                 let new_status: String?
                 let metadata: AnyJSON?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.materialRequestAudit)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .order("performed_at", ascending: false)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.materialRequestAudit,
+                filters: [.eq("company_id", companyID.uuidString)],
+                orderBy: "performed_at",
+                ascending: false
+            )
 
             let events: [MaterialRequestAudit] = rows.compactMap { row in
                 guard let id  = UUID(uuidString: row.id),
@@ -921,12 +929,14 @@ extension SyncEngine {
                 let is_active: Bool
                 let updated_at: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.workflowSettings)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_active", value: true)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.workflowSettings,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_active", true)
+                ]
+            )
 
             let settings: [WorkflowSetting] = rows.compactMap { row in
                 guard let id  = UUID(uuidString: row.id),
@@ -973,12 +983,14 @@ extension SyncEngine {
                 let is_preferred: Bool
                 let updated_at: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.suppliers)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.suppliers,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ]
+            )
 
             var merged = store.suppliers.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -1084,12 +1096,14 @@ extension SyncEngine {
                 let delivery_photo_url: String?
                 let receipt_scan_path: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.materialRequests)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.materialRequests,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ]
+            )
 
             var merged = store.materialRequests.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -1260,12 +1274,14 @@ extension SyncEngine {
                 let invoice_matched_by: String?
                 let invoice_flagged: Bool?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.purchaseOrders)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .eq("is_deleted", value: false)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.purchaseOrders,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ]
+            )
 
             var merged = store.purchaseOrders.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -1403,12 +1419,12 @@ extension SyncEngine {
                 let sort_order: Int
                 let company_id: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.productServices)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .order("sort_order")
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.productServices,
+                filters: [.eq("company_id", companyID.uuidString)],
+                orderBy: "sort_order"
+            )
 
             var merged = store.productServices.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -1488,11 +1504,11 @@ extension SyncEngine {
                 let override_price: Double
                 let notes: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.clientPricings)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.clientPricings,
+                filters: [.eq("company_id", companyID.uuidString)]
+            )
 
             var merged = store.clientPricings.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -1698,12 +1714,13 @@ extension SyncEngine {
                 let sample_data_created_at: String?
                 let sample_data_created_by: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.estimates)
-                .select()
-                .eq("company_id", value: companyID.uuidString)
-                .order("created_at", ascending: false)
-                .execute().value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.estimates,
+                filters: [.eq("company_id", companyID.uuidString)],
+                orderBy: "created_at",
+                ascending: false
+            )
 
             var merged = store.estimates.filter {
                 $0.syncStatus == .pending || $0.syncStatus == .local
@@ -1930,14 +1947,16 @@ extension SyncEngine {
                 let sample_data_created_at: String?
                 let sample_data_created_by: String?
             }
-            let rows: [Row] = try await supabase
-                .from(SupabaseTable.quotes)
-                .select()
-                .eq("company_id", value: companyID.uuidString)   // FIX: tenant isolation
-                .eq("is_deleted", value: false)
-                .order("quote_date", ascending: false)
-                .execute()
-                .value
+            let rows: [Row] = try await client.select(
+                Row.self,
+                from: SupabaseTable.quotes,
+                filters: [
+                    .eq("company_id", companyID.uuidString),
+                    .eq("is_deleted", false)
+                ],
+                orderBy: "quote_date",
+                ascending: false
+            )
 
             // Include .failed so push-rejected quotes survive across pulls and
             // can be retried instead of silently disappearing.

@@ -59,29 +59,54 @@ protocol AskiSyncClient: Sendable {
     /// concerns don't apply.
     func upsert<T: Encodable>(_ payload: T, into table: String) async throws
 
-    /// Select rows from a table with optional filters + ordering, decoding
-    /// into T. Equivalent to:
-    ///   supabase.from(table).select().eq(...).eq(...).order(orderBy)
-    ///     .execute().value
-    /// Pass `orderBy = nil` for unordered queries.
+    /// Select rows from a table with optional filters + ordering + limit,
+    /// decoding into T. Equivalent to:
+    ///   supabase.from(table).select().eq(...).eq(...)
+    ///     .order(orderBy, ascending: ...).limit(limit).execute().value
+    /// Pass `orderBy = nil` for unordered queries; `limit = nil` for no
+    /// explicit cap (Supabase has its own server-side cap).
     func select<T: Decodable>(
         _ type: T.Type,
         from table: String,
         filters: [SyncFilter],
         orderBy: String?,
-        ascending: Bool
+        ascending: Bool,
+        limit: Int?
     ) async throws -> [T]
 }
 
 extension AskiSyncClient {
-    /// Convenience overload for the most common case — filters only,
-    /// no explicit ordering.
+    /// Convenience overload — filters only, no ordering, no limit.
     func select<T: Decodable>(
         _ type: T.Type,
         from table: String,
         filters: [SyncFilter]
     ) async throws -> [T] {
-        try await select(type, from: table, filters: filters, orderBy: nil, ascending: true)
+        try await select(type, from: table, filters: filters,
+                         orderBy: nil, ascending: true, limit: nil)
+    }
+
+    /// Convenience overload — filters + ordering, no limit.
+    func select<T: Decodable>(
+        _ type: T.Type,
+        from table: String,
+        filters: [SyncFilter],
+        orderBy: String,
+        ascending: Bool = true
+    ) async throws -> [T] {
+        try await select(type, from: table, filters: filters,
+                         orderBy: orderBy, ascending: ascending, limit: nil)
+    }
+
+    /// Convenience overload — filters + limit, no ordering.
+    func select<T: Decodable>(
+        _ type: T.Type,
+        from table: String,
+        filters: [SyncFilter],
+        limit: Int
+    ) async throws -> [T] {
+        try await select(type, from: table, filters: filters,
+                         orderBy: nil, ascending: true, limit: limit)
     }
 }
 
@@ -132,7 +157,8 @@ struct LiveSyncClient: AskiSyncClient {
         from table: String,
         filters: [SyncFilter],
         orderBy: String?,
-        ascending: Bool
+        ascending: Bool,
+        limit: Int?
     ) async throws -> [T] {
         var query = client.from(table).select()
         for filter in filters {
@@ -141,8 +167,17 @@ struct LiveSyncClient: AskiSyncClient {
             case .neq: query = query.neq(filter.column, value: filter.value)
             }
         }
+        // Postgrest's fluent chain returns different transformed-builder
+        // types from .order / .limit, so we narrow via local var rebinds.
         if let orderBy {
-            return try await query.order(orderBy, ascending: ascending).execute().value
+            let ordered = query.order(orderBy, ascending: ascending)
+            if let limit {
+                return try await ordered.limit(limit).execute().value
+            }
+            return try await ordered.execute().value
+        }
+        if let limit {
+            return try await query.limit(limit).execute().value
         }
         return try await query.execute().value
     }
