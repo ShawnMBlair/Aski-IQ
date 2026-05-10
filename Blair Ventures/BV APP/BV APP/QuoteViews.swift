@@ -547,35 +547,50 @@ struct QuoteListView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if filtered.isEmpty {
-                    VStack(spacing: 16) {
-                        Spacer()
-                        Image(systemName: "doc.richtext")
-                            .font(.system(size: 52))
-                            .foregroundColor(.secondary)
-                        Text("No quotes yet.")
-                            .font(.headline)
-                        Text("Create a quote from an existing estimate.")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                            .multilineTextAlignment(.center)
-                            .padding(.horizontal)
-                        Button("New Quote") { showCreate = true }
-                            .buttonStyle(.borderedProminent)
-                        Spacer()
-                    }
-                } else {
-                    List {
-                        ForEach(filtered) { quote in
-                            NavigationLink {
-                                QuoteDetailView(quote: quote)
-                            } label: {
-                                QuoteListRow(quote: quote)
+            VStack(spacing: 0) {
+                // Phase 2 first-launch sync gate (extended in Phase 7).
+                // A fresh-install user creating a quote before clients /
+                // estimates / opportunities pull would emit a record
+                // referencing nonexistent IDs, causing FK or RLS failures
+                // on push. Banner + disabled-create button reduces the
+                // class of "I created it but it won't sync" reports.
+                if !store.hasCompletedFirstSync {
+                    FirstLaunchSyncGateBanner()
+                        .padding(.horizontal)
+                        .padding(.top, 8)
+                }
+
+                Group {
+                    if filtered.isEmpty {
+                        VStack(spacing: 16) {
+                            Spacer()
+                            Image(systemName: "doc.richtext")
+                                .font(.system(size: 52))
+                                .foregroundColor(.secondary)
+                            Text("No quotes yet.")
+                                .font(.headline)
+                            Text("Create a quote from an existing estimate.")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal)
+                            Button("New Quote") { showCreate = true }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(!store.hasCompletedFirstSync)
+                            Spacer()
+                        }
+                    } else {
+                        List {
+                            ForEach(filtered) { quote in
+                                NavigationLink {
+                                    QuoteDetailView(quote: quote)
+                                } label: {
+                                    QuoteListRow(quote: quote)
+                                }
                             }
                         }
+                        .listStyle(.plain)
                     }
-                    .listStyle(.plain)
                 }
             }
             .searchable(text: $searchText, prompt: "Search quotes or clients")
@@ -586,6 +601,7 @@ struct QuoteListView: View {
                     Button { showCreate = true } label: {
                         Image(systemName: "plus")
                     }
+                    .disabled(!store.hasCompletedFirstSync)
                 }
             }
             .sheet(isPresented: $showCreate) {
