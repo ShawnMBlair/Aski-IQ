@@ -6,13 +6,13 @@ import Combine
 
 // MARK: - Chat Message Model
 
-struct ChatMessage: Identifiable, Equatable {
-    let id = UUID()
+struct ChatMessage: Identifiable, Equatable, Codable {
+    var id: UUID = UUID()
     let role: Role
     var content: String
-    let timestamp: Date = Date()
+    var timestamp: Date = Date()
 
-    enum Role { case user, assistant }
+    enum Role: String, Codable { case user, assistant }
 }
 
 // MARK: - Chat Service
@@ -21,17 +21,44 @@ struct ChatMessage: Identifiable, Equatable {
 final class AIChatService: ObservableObject {
     static let shared = AIChatService()
 
-    @Published var messages: [ChatMessage] = []
+    @Published var messages: [ChatMessage] = [] {
+        didSet { persistMessages() }
+    }
     @Published var isLoading = false
     @Published var error: String? = nil
-
-    private init() {}
 
     /// True when a streaming response is actively producing tokens.
     /// The chat view binds this to render an "is typing" pulse on the
     /// in-progress assistant bubble (different visual from the pre-
     /// first-token loading dots).
     @Published var isStreaming = false
+
+    /// UserDefaults key for persisted conversation. Per-user keying is
+    /// handled by the auth flow clearing this on sign-out (see
+    /// `clearForLogout()` below).
+    private static let storageKey = "aski_ai_chat_history_v1"
+
+    /// Cap on persisted messages so a long-running conversation doesn't
+    /// bloat the on-disk store. The chat itself can render as many as
+    /// the user generates in one session; only the persisted slice is
+    /// trimmed.
+    private static let persistedHistoryCap = 200
+
+    private init() {
+        // Hydrate persisted history on first access. Failure is silent
+        // — a corrupt blob just means the user starts fresh, no error
+        // visible since chat already supports the empty state gracefully.
+        if let data = UserDefaults.standard.data(forKey: Self.storageKey),
+           let decoded = try? JSONDecoder().decode([ChatMessage].self, from: data) {
+            messages = decoded
+        }
+    }
+
+    private func persistMessages() {
+        let trimmed = messages.suffix(Self.persistedHistoryCap)
+        guard let data = try? JSONEncoder().encode(Array(trimmed)) else { return }
+        UserDefaults.standard.set(data, forKey: Self.storageKey)
+    }
 
     func send(userText: String, context: String) async {
         guard !userText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -120,8 +147,9 @@ final class AIChatService: ObservableObject {
     }
 
     func clearHistory() {
-        messages = []
+        messages = []  // didSet persists the empty array
         error = nil
+        UserDefaults.standard.removeObject(forKey: Self.storageKey)
     }
 
     private func systemPrompt(context: String) -> String {
@@ -312,9 +340,24 @@ struct AIChatView: View {
         if store.overdueInvoices.count > 0 {
             prompts.append("What invoices are overdue?")
         }
+        // Phase 8 / Inventory v1 — surface inventory + procurement
+        // prompts when there's something useful for the AI to talk about.
+        let pendingMRs = store.materialRequests.filter {
+            !$0.isDeleted && $0.status == .submitted
+        }
+        if !pendingMRs.isEmpty {
+            prompts.append("What material requests are awaiting approval?")
+        }
+        let outOfStockItems = store.inventoryItems.filter { item in
+            !item.isDeleted && item.isActive
+                && store.totalQuantityOnHand(itemID: item.id) <= 0
+        }
+        if !outOfStockItems.isEmpty {
+            prompts.append("Which inventory items are out of stock?")
+        }
         prompts.append("Which crews are on site today?")
         prompts.append("Give me a project status overview")
-        return Array(prompts.prefix(4))
+        return Array(prompts.prefix(5))
     }
 
     // MARK: Input bar
@@ -497,6 +540,64 @@ extension AppStore {
         ]
         if !openOpps.isEmpty {
             lines.append("Top opportunities: " + openOpps.prefix(3).map { "\($0.title) [\($0.stage.rawValue)]" }.joined(separator: ", "))
+        }
+
+        // Procurement — Material Requests + Purchase Orders
+        let openMRs = materialRequests.filter { !$0.isDeleted && $0.status.isOpen }
+        let pendingApprovalMRs = materialRequests.filter { !$0.isDeleted && $0.status == .submitted }
+        let openPOs = purchaseOrders.filter { !$0.isDeleted && $0.status.isOpen }
+        lines += [
+            "",
+            "=== PROCUREMENT ===",
+            "Open material requests: \(openMRs.count) (\(pendingApprovalMRs.count) awaiting approval)",
+            "Open purchase orders: \(openPOs.count)",
+        ]
+        if !pendingApprovalMRs.isEmpty {
+            let preview = pendingApprovalMRs.prefix(3)
+                .map { "\($0.requestNumber) — \($0.estimatedTotal.currencyString)" }
+                .joined(separator: ", ")
+            lines.append("Pending MRs: \(preview)")
+        }
+
+        // Phase 8 / Inventory v1 — surface stock state in the AI context
+        let activeItems = inventoryItems.filter { !$0.isDeleted && $0.isActive }
+        let lowStockItems = activeItems.filter { item in
+            // "Low stock" heuristic for v1: any active item whose total
+            // qty-on-hand has dropped to 0. v2 will add per-item
+            // reorder thresholds and replace this rule.
+            totalQuantityOnHand(itemID: item.id) <= 0
+        }
+        let totalStockValue: Decimal = inventoryStockLevels
+            .filter { !$0.isDeleted }
+            .reduce(0) { acc, level in
+                acc + (level.quantityOnHand * (level.avgUnitCost ?? 0))
+            }
+        let recentTransfers = recentInventoryTransfers.prefix(5)
+        lines += [
+            "",
+            "=== INVENTORY ===",
+            "Catalog: \(activeItems.count) active items across \(activeStockLocations.count) locations",
+            "Items currently out of stock: \(lowStockItems.count)",
+            "Estimated stock value: \(totalStockValue.currencyString)",
+        ]
+        if !recentTransfers.isEmpty {
+            lines.append("Recent movements (\(recentTransfers.count)):")
+            for t in recentTransfers {
+                let item = activeItems.first { $0.id == t.itemID }?.name ?? "(unknown item)"
+                lines.append("  • \(t.transferNumber) — \(t.quantity) of \(item)")
+            }
+        }
+
+        // Contracts + Sub-Contracts (safety / compliance signal)
+        let activeContracts = contracts.filter { !$0.isDeleted && $0.status != .terminated }
+        let activeSubContracts = subContracts.filter { !$0.isDeleted }
+        if !activeContracts.isEmpty || !activeSubContracts.isEmpty {
+            lines += [
+                "",
+                "=== CONTRACTS ===",
+                "Active contracts: \(activeContracts.count)",
+                "Active sub-contracts: \(activeSubContracts.count)",
+            ]
         }
 
         if let weather = currentWeather {
