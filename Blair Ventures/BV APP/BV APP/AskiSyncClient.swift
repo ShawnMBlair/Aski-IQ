@@ -130,7 +130,7 @@ extension AskiSyncClient {
 
 /// A single column predicate. Mirrors the subset of Postgrest filter
 /// operators SyncEngine uses today; grow as needed.
-struct SyncFilter: Sendable {
+struct SyncFilter: Sendable, Equatable {
     let column: String
     let op: Op
     /// Single-value carrier (eq, neq). Empty for multi-value ops.

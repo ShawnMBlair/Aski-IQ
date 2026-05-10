@@ -22,7 +22,7 @@ import Supabase
 final class SyncEngineDJRPushTests: XCTestCase {
 
     @MainActor
-    private func withFreshStore<T>(_ body: (AppStore) throws -> T) rethrows -> T {
+    private func withFreshStore<T>(_ body: (AppStore) async throws -> T) async rethrows -> T {
         let store = AppStore.shared
         let savedDJRs      = store.allDailyJobReports()
         let savedCompanyID = store.currentCompanyID
@@ -38,7 +38,7 @@ final class SyncEngineDJRPushTests: XCTestCase {
         // Reset to a known state.
         UserDefaults.standard.removeObject(forKey: "djr_v1")
         store.currentCompanyID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
-        return try body(store)
+        return try await body(store)
     }
 
     @MainActor

@@ -96,14 +96,4 @@ final class FakeSyncClient: AskiSyncClient {
     }
 }
 
-// MARK: - SyncFilter Equatable
-
-extension SyncFilter: Equatable {
-    static func == (a: SyncFilter, b: SyncFilter) -> Bool {
-        a.column == b.column && a.value == b.value && a.op == b.op
-    }
-}
-
-extension SyncFilter.Op: Equatable {}
-
 #endif

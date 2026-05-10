@@ -18,7 +18,7 @@ import XCTest
 final class SyncEngineMRPushTests: XCTestCase {
 
     @MainActor
-    private func withFreshStore<T>(_ body: (AppStore) throws -> T) rethrows -> T {
+    private func withFreshStore<T>(_ body: (AppStore) async throws -> T) async rethrows -> T {
         let store = AppStore.shared
         let savedMRs       = store.materialRequests
         let savedPOs       = store.purchaseOrders
@@ -31,7 +31,7 @@ final class SyncEngineMRPushTests: XCTestCase {
         store.materialRequests = []
         store.purchaseOrders   = []
         store.currentCompanyID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
-        return try body(store)
+        return try await body(store)
     }
 
     // MARK: - Material Requests
