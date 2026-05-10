@@ -81,14 +81,13 @@ select
     role_data.action_key,
     role_data.approval_limit_amount,
     role_data.can_self_approve,
-    -- Boolean columns retain meaning for material_request.* rows; for
-    -- non-MR action keys they're zero/false. The new is-allowed
-    -- semantic should rely on a forthcoming `is_allowed boolean`
-    -- column added in Wave 2 to make non-MR actions first-class.
-    -- For now, presence of a row with the right (company, role,
-    -- action) means "this role can perform this action" — Wave 3 swaps
+    -- The four can_* columns are MR-specific and meaningless for
+    -- non-MR action keys. Wave 2 will add an `is_allowed boolean`
+    -- column to make non-MR actions first-class; until then,
+    -- presence of a row with the right (company, role, action)
+    -- means "this role can perform this action" — Wave 3 swaps
     -- the gating helpers to read that.
-    false, false, false, false, false
+    false, false, false, false
 from public.companies c
 cross join (
     values
