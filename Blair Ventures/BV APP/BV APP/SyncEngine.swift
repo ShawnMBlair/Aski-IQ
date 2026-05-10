@@ -2658,6 +2658,7 @@ final class SyncEngine: ObservableObject {
                 let id: String; let project_id: String
                 let report_date: String; let prepared_by: String
                 let work_summary: String?
+                let report_number: String?
                 let company_id: String?
             }
             let rows: [DJRRow] = try await supabase
@@ -2673,7 +2674,7 @@ final class SyncEngine: ObservableObject {
                       let date = _syncDateFormatter.date(from: row.report_date) else { continue }
                 if store.allDailyJobReports().contains(where: { $0.id == uuid && $0.syncStatus == .synced }) { continue }
                 var djr = DailyJobReport(projectID: projID,
-                                         reportNumber: "",
+                                         reportNumber: row.report_number ?? "",
                                          reportDate: date,
                                          submittedByName: row.prepared_by)
                 djr.id            = uuid
@@ -2699,14 +2700,15 @@ final class SyncEngine: ObservableObject {
             guard let companyID = store.currentCompanyID else { continue }
             do {
                 var payload: [String: AnyJSON] = [
-                    "id":           .string(djr.id.uuidString),
-                    "company_id":   .string(companyID.uuidString),
-                    "project_id":   .string(djr.projectID.uuidString),
-                    "report_date":  .string(djr.reportDate.iso8601Date),
-                    "prepared_by":  .string(djr.submittedByName),
-                    "work_summary": .string(djr.workPerformed),
-                    "is_deleted":   .bool(djr.isDeleted),
-                    "deleted_by":   djr.deletedBy.map { .string($0) } ?? .null
+                    "id":            .string(djr.id.uuidString),
+                    "company_id":    .string(companyID.uuidString),
+                    "project_id":    .string(djr.projectID.uuidString),
+                    "report_date":   .string(djr.reportDate.iso8601Date),
+                    "prepared_by":   .string(djr.submittedByName),
+                    "work_summary":  .string(djr.workPerformed),
+                    "report_number": .string(djr.reportNumber),
+                    "is_deleted":    .bool(djr.isDeleted),
+                    "deleted_by":    djr.deletedBy.map { .string($0) } ?? .null
                 ]
                 if let deletedAt = djr.deletedAt {
                     payload["deleted_at"] = .string(_isoFmt.string(from: deletedAt))

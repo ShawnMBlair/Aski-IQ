@@ -322,12 +322,10 @@ extension AppStore {
     /// Phase 3: parsed-max+1 over (projectID, companyID), excluding
     /// soft-deleted. Same correctness fix as the other modules.
     ///
-    /// SCHEMA GAP: as of 2026-05-09, prod's `daily_job_reports` table
-    /// has no `report_number` column. Swift carries the field locally
-    /// but `pushPendingDJRs` doesn't include it in the upsert payload,
-    /// so DJR numbers are NEVER pushed and don't survive sync round-trips.
-    /// A partial unique index can't apply until the column is added to
-    /// the schema. Tracked in migrations/phase3_drafts/README.md.
+    /// Schema closed by `migrations/phase3_drafts/DJR1_daily_job_reports_report_number.sql`
+    /// (adds `report_number` column + backfill + partial unique on
+    /// `(company_id, project_id, report_number) WHERE is_deleted = false`).
+    /// SyncEngine pull/push now round-trip the number.
     func nextDJRNumber(for projectID: UUID) -> String {
         let project = projects.first { $0.id == projectID }
         let prefix = project?.jobNumber ?? "PRJ"

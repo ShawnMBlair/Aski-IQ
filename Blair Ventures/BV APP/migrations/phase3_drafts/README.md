@@ -17,7 +17,7 @@ Pattern (proven in procurement):
 | **Quotes** | ✅ QuoteViews.swift `nextQuoteNumber` | ✅ `QUO1_quotes_number_partial_unique.sql` | This PR |
 | **Change Orders** | ✅ ChangeOrder.swift `nextCONumber` | ✅ `CO1_change_orders_number_partial_unique.sql` (per-project scope) | This PR |
 | **RFIs** | ✅ RFI.swift `nextRFINumber` | ✅ `RFI1_rfis_number_partial_unique.sql` (per-project scope) | This PR |
-| **Daily Job Reports** | ✅ DailyJobReport.swift `nextDJRNumber` | ⚠️ Blocked — see Schema Gaps below | This PR (Swift only) |
+| **Daily Job Reports** | ✅ DailyJobReport.swift `nextDJRNumber` | ✅ `DJR1_daily_job_reports_report_number.sql` (column add + backfill + partial unique) | This PR |
 | **Contracts** | ✅ ContractStore.swift `nextContractNumber` | ✅ `CON1_contracts_number_partial_unique.sql` | This PR |
 | **Sub-Contracts** | ✅ Subcontractor.swift `nextSubContractNumber` | ✅ `SC1_subcontracts_number_partial_unique.sql` | This PR |
 | **Material Sales** | ✅ CRMCommercialBridge.swift `nextSaleNumber` | ✅ `MS1_material_sales_number_partial_unique.sql` | This PR |
@@ -29,7 +29,7 @@ Migrations in this folder are independent and can be applied in any order — ea
 
 ## Phase 3 status — COMPLETE (pending prod-apply approval)
 
-All 8 modules' Swift correctness fixes are landed on `claude/xenodochial-bhaskara-96bfe2`. **7 partial-unique migration drafts** sit in this folder ready for prod application — `INV1`, `QUO1`, `CO1`, `RFI1`, `CON1`, `SC1`, `MS1`. The eighth (DJR) is blocked on the `report_number` schema-gap ticket called out below.
+All 8 modules' Swift correctness fixes are landed on `claude/xenodochial-bhaskara-96bfe2`. **8 migration drafts** sit in this folder ready for prod application — `INV1`, `QUO1`, `CO1`, `RFI1`, `CON1`, `SC1`, `MS1`, plus `DJR1` (column add + backfill + partial unique; SyncEngine pull/push wired in the same commit).
 
 **SyncErrorMapper coverage**: 10 of 10 commercial push functions now wire through it (was 1 at start of session) — Material Requests, Purchase Orders, Invoices, Quotes, Change Orders, RFIs, DJRs, Contracts, Sub-Contracts, Material Sales, Suppliers (the count is 11 if you split MR/PO; 10 push functions if grouped). Failed Sync UI shows per-row reasons everywhere now.
 
@@ -37,9 +37,9 @@ All 8 modules' Swift correctness fixes are landed on `claude/xenodochial-bhaskar
 
 After applying a migration, retry any rows in Failed Syncs that hit the legacy duplicate-number conflict — they should auto-pick the next available number on the second pass.
 
-## Schema gaps surfaced by the Phase 3 audit
+## Schema gaps surfaced by the Phase 3 audit — RESOLVED
 
-| Module | Gap | Impact | Action |
-|---|---|---|---|
-| Daily Job Reports | Prod `daily_job_reports` has no `report_number` / `number` column. Swift `DailyJobReport.reportNumber` exists locally but `pushPendingDJRs` doesn't include it in the upsert payload, so DJR numbers never reach the server. | DJR numbers are local-only — different devices show different numbers for the same DJR row. Audit / reporting can't reference a stable DJR identifier. Partial unique index can't apply until column is added. | Pre-Phase-3 migration to **add `report_number text` + backfill** is needed. Track as a separate ticket; the Swift correctness fix landed in this PR is a no-op until the column exists. |
+| Module | Gap | Resolution |
+|---|---|---|
+| Daily Job Reports | Prod `daily_job_reports` had no `report_number` / `number` column. Swift `DailyJobReport.reportNumber` existed locally but `pushPendingDJRs` didn't include it in the upsert payload, so DJR numbers never reached the server. | Closed by `DJR1_daily_job_reports_report_number.sql` (column add + backfill + partial unique) plus SyncEngine `pullDJRs` / `pushPendingDJRs` wiring. After prod-apply, retry any DJRs in Failed Syncs to push their local number. |
 
