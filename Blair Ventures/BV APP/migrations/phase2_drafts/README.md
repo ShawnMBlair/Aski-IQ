@@ -2,7 +2,7 @@
 
 Per the [Aski IQ Major Issue Repair Plan](../../DEVELOPER_ROADMAP.md), Phase 2 closes the gap that prevents Supabase staging branches from replaying migration history cleanly.
 
-## The gotcha (already documented in memory)
+## The gotcha
 
 Aski IQ's foundational tables (`companies`, `projects`, `employees`, `profiles`, etc.) were created outside Supabase's migration history — likely via the dashboard / SQL editor before migration files were adopted. The first registered migration (`20260426191024_create_company_cost_codes`) references `companies(id)` as a FK target. On a fresh branch, that table doesn't exist yet, so the migration fails:
 
@@ -14,76 +14,85 @@ ERROR: relation "companies" does not exist
 
 ## Status — 2026-05-10
 
-**Three iterations tested; v4 deferred to dedicated session.**
+**Five iterations tested; v6+ deferred to dedicated session.**
 
-Each iteration tested on a fresh staging branch advanced the chain further before hitting the next layer of pre-history dependencies:
+Each iteration tested on a fresh staging branch advanced the chain further before hitting the next layer of pre-history dependencies. Each version was registered with version `00000000000000` (sorts before all real migrations), tested, then rolled back to keep prod migration history clean.
 
-| Version | Coverage | Replay outcome |
+| Version | Coverage | Migrations replayed |
 |---|---|---|
-| `00000000000000_foundational_baseline.sql` (v1) | 4 tables: companies, projects, employees, profiles | Advanced 0→3 historical migrations. Failed at `quotes_add_missing_columns_and_rls` on missing pre-history tables (quotes, estimates, crm_opportunities). |
-| `00000000000000_foundational_baseline_v2.sql` | 38 tables (v1 + 34 pre-history tables, minimal column shapes) | Advanced 0→4 historical migrations. Failed at same migration on missing pre-history column `quotes.client_id`. |
-| `00000000000000_foundational_baseline_v3.sql` | 38 tables + ~25 index-derived pre-history columns | Advanced 0→7 historical migrations (through the 3 quote-related migrations + create_product_services_and_client_pricings). Failed at `harden_function_grants` on missing pre-history **functions**. |
+| `*_foundational_baseline.sql` (v1) | 4 tables | 0 → 3 |
+| `*_v2.sql` | 38 tables (minimal) | 0 → 4 |
+| `*_v3.sql` | 38 tables + 25 index-derived columns | 0 → 7 |
+| `*_v4.sql` | v3 + 10 pre-history function stubs | 0 → 18 |
+| **`*_v5.sql`** ← latest | v4 + `updated_at` on 25 tables | **0 → 45** ← most-advanced |
 
-All three versions were rolled back from `supabase_migrations.schema_migrations` after testing so prod migration history stays clean while v4 is in flight. The three SQL files in this directory remain as the foundation a v4 author can build on.
+v5 passes ~50% of the migration history. **All five SQL files remain in this directory** as documented progress for the v6 author.
 
-## Next layer to address (v4)
+## The progression each iteration uncovered
 
-`harden_function_grants` (`20260428195136`) does `REVOKE EXECUTE ON FUNCTION` for ~30 pre-history functions. v4 needs `CREATE OR REPLACE FUNCTION` stubs for each. Identified by inspecting the failing migration's text:
-
-- `handle_new_user()` — new-user trigger (populates profiles row)
-- `stamp_company_id()` — generic `NEW.company_id` stamper trigger
-- `set_updated_at()` — generic `NEW.updated_at = now()` trigger
-- `set_quotes_updated_at()` — quote-specific updated_at trigger
-- `update_crm_opportunity_timestamp()` — CRM opp updated_at trigger
-- `get_my_company_id()` — RLS helper, returns `(select company_id from profiles where id = auth.uid())`
-- `get_my_role()` — RLS helper for role lookup
-- `is_field_role()` — predicate for role check
-- `is_manager_or_above()` — predicate for role check
-- `create_invite(...)` — invite-issuance RPC
-
-Bodies can be no-op stubs at the baseline (e.g. `RETURNS trigger AS $$ BEGIN RETURN NEW; END; $$`) — later migrations `CREATE OR REPLACE` them with real implementations. Helpers that return values may need a real-shaped stub returning the simplest valid value (e.g. `RETURNS uuid AS $$ SELECT NULL::uuid $$`).
-
-After v4 passes `harden_function_grants`, expect the next failure at one of `pin_function_search_path`, `fix_search_path_keep_schema_visible`, or `revoke_public_execute_on_helpers` — same pattern of pre-history function references. Identify + stub each. Continue until the test branch comes up green (status = `FUNCTIONS_DEPLOYED`, not `MIGRATIONS_FAILED`).
-
-## Pre-history tables already covered (v3)
-
-| | | |
+| Layer | What was missing | Fixed in |
 |---|---|---|
-| `audit_snapshots` | `certificates` | `change_orders` |
-| `clients` | `company_settings` | `crew_members` |
-| `crews` | `crm_activities` | `crm_checklists` |
-| `crm_contacts` | `crm_opportunities` | `crm_tasks` |
-| `daily_job_reports` | `equipment` | `estimate_line_items` |
-| `estimates` | `exception_logs` | `form_submissions` |
-| `form_templates` | `incidents` | `invites` |
-| `invoices` | `material_requests` | `project_assignments` |
-| `project_budgets` | `purchase_order_acceptance_tokens` | `purchase_orders` |
-| `quotes` | `rfis` | `schedule_entries` |
-| `sub_contracts` | `subcontractors` | `suppliers` |
-| `timesheet_entries` | | |
+| Foundational tables | companies, projects, employees, profiles | v1 |
+| Other pre-history tables (~34) | quotes, estimates, clients, crm_*, invoices, etc. | v2 |
+| Pre-history columns referenced by indexes | client_id, project_id, opportunity_id, contact_id, is_deleted, etc. (~25 total) | v3 |
+| Pre-history functions (10) | handle_new_user, stamp_company_id, set_updated_at, get_my_company_id, etc. | v4 |
+| Pre-history `updated_at` columns | 25 tables that the soft-delete migration assumes already have updated_at | v5 |
+| **Pre-history columns referenced by CHECK constraints** | **status, contingency_percent, start_date, end_date, etc.** | **v6 (next)** |
 
-Plus the 4 in v1: `companies`, `projects`, `employees`, `profiles`. **38 tables total.**
+## v5 migration sequence (what worked)
 
-## Recommended v4 approach for the dedicated session
+The 45 migrations v5 cleared, grouped — useful as a "known good" reference:
 
-1. Start from v3 SQL.
-2. Add `CREATE OR REPLACE FUNCTION` stubs for the ~10 functions listed above.
-3. Test on a fresh branch (the same INSERT-then-create-branch pattern). Identify next failing migration via:
+- v5 baseline (38 tables + 10 function stubs)
+- create_company_cost_codes / create_import_batches / create_import_rows
+- quotes_add_missing_columns_and_rls / quotes_add_discount_tax_rate
+- create_product_services_and_client_pricings
+- harden_function_grants / pin_function_search_path / fix_search_path_keep_schema_visible / revoke_public_execute_on_helpers
+- drop_permissive_audit_snapshots_select / add_quote_estimate_revisions
+- add_soft_delete_and_timestamp_columns / create_material_sales_table / add_soft_delete_to_djr_and_incidents / add_soft_delete_to_remaining_tables
+- align_clients_table_with_swift_payload / cleanup_sample_data_for_aski_iq_tenant
+- 8 enforce_*_company_id_not_null migrations
+- cleanup_orphan_company_id_rows / add_account_deletion_log
+- AI hardening: per-company key, limits, vault, RPCs, idempotency (5 migrations)
+- quote_acceptance_tokens
+- contracts_module_phase1 + phase2a/b/c/f (5 migrations)
+- stripe_payment_recording / qbo_integration / esignature_requests
+- workflow_automation_sync / role_based_rls_for_financial_tables
+- **(fails here at estimate_converted_status)**
+
+## v6 next-step plan
+
+v5 fails at migration 46 (`estimate_converted_status`) on missing `estimates.status` referenced by a new CHECK constraint. Diagnostic SQL run during v5 analysis surfaced the full set of CHECK-constraint columns to add for v6:
+
+| Table | Missing pre-history columns to add |
+|---|---|
+| `estimates` | `status text`, `contingency_percent numeric DEFAULT 0`, `overhead_percent numeric DEFAULT 0`, `profit_percent numeric DEFAULT 0`, `loss_reason text` |
+| `quotes` | `contingency_percent numeric DEFAULT 0`, `discount_percent numeric DEFAULT 0`, `tax_rate numeric`, `quote_date timestamptz DEFAULT now()` |
+| `invoices` | `tax_rate numeric`, `invoice_date timestamptz DEFAULT now()` |
+| `material_sales` | (table created by `create_material_sales_table`; CHECK on `tax_rate` — column needs to be on the migration's CREATE TABLE) |
+| `projects` | `start_date timestamptz`, `end_date timestamptz`, `contract_value numeric` |
+| `sub_contracts` | `retention_percent numeric DEFAULT 10`, `start_date timestamptz`, `end_date timestamptz`, `contract_value numeric DEFAULT 0`, `invoiced_to_date numeric DEFAULT 0`, `paid_to_date numeric DEFAULT 0` |
+
+After v6 passes through `estimate_converted_status` and the next ~10 migrations, expect the next failure layer. The discovery loop will continue; each iteration should advance ~5-10 migrations before the next missing object surfaces.
+
+## Recommended v6 approach for the dedicated session
+
+1. Start from v5 SQL.
+2. Add the column list above to v6.
+3. Test on a fresh branch (the same INSERT-then-create-branch pattern). Look at what failed via:
    ```sql
+   -- On the failed branch:
    SELECT version, name FROM supabase_migrations.schema_migrations ORDER BY version;
+   -- The last entry is the highest-applied; the next-version entry in main's
+   -- full migration list is what failed.
    ```
-   The last entry is the highest-applied; the next-version entry in main's full migration list is what failed.
-4. If failure is another function-related migration, look at its text via:
-   ```sql
-   SELECT statements FROM supabase_migrations.schema_migrations WHERE version = '<failing version>';
-   ```
-   Extract function names. Add stubs. Re-test.
-5. Iterate until green. Each cycle is ~3–5 minutes (branch creation + replay) + however long it takes to write the next batch of stubs.
-6. Once the branch comes up `FUNCTIONS_DEPLOYED`:
-   - Update [project_supabase_branching.md](../../../../../.claude/projects/-Users-shawnblair-Desktop-Aski-IQ-Desktop---Shawn-s-MacBook-Pro--2--Blair-Ventures-App--Blair-Ventures/memory/project_supabase_branching.md) memory note: replace the bootstrap-then-test workaround with "branches replay cleanly; just create + use".
-   - Save the working SQL as `00000000000000_foundational_baseline.sql` (overwrite v1) — the canonical baseline.
-   - Optionally: register on prod (it's a no-op there since all tables/functions already exist).
+4. If failure is column-related, add the column to v7. If function-related, add a stub. If RLS/policy-related, look for missing helpers.
+5. Iterate until the branch comes up `FUNCTIONS_DEPLOYED`.
+6. Once green:
+   - Update [project_supabase_branching.md](../../../../../.claude/projects/-Users-shawnblair-Desktop-Aski-IQ-Desktop---Shawn-s-MacBook-Pro--2--Blair-Ventures-App--Blair-Ventures/memory/project_supabase_branching.md) memory note to mark the gotcha closed.
+   - Save the working SQL as `00000000000000_foundational_baseline.sql` (canonical) — overwrite v1.
+   - Optionally: register on prod (no-op there since all objects already exist).
 
-## Time estimate (v4 → green)
+## Estimated remaining work
 
-Probably 2–4 hours of focused work, dominated by the iteration cycles. The pattern is mechanical once the function-stub approach is established.
+v5 → green: probably 5-10 more iterations, each ~5 minutes (branch creation + replay + analysis + edit). 1-2 hours of focused work. The pattern is mechanical now that the iteration framework is established.
