@@ -966,7 +966,7 @@ struct MRDetailView: View {
 
                 // Actions
                 VStack(spacing: 10) {
-                    if local.status == .draft && store.canCreateMaterialRequest {
+                    if local.status == .draft && store.canPerform(action: .materialRequestCreate) {
                         // Self-approve shortcut for trusted roles within their
                         // approval limit — skips the submit-then-approve dance
                         // for routine purchases by managers / executives.
@@ -1014,7 +1014,7 @@ struct MRDetailView: View {
                             .frame(maxWidth: .infinity).padding(.vertical, 8)
                             .background(Color.orange.opacity(0.08)).cornerRadius(8)
                     }
-                    if local.status == .approved && store.canSendToSupplier {
+                    if local.status == .approved && store.canPerform(action: .materialRequestSendToSupplier) {
                         // No supplier yet — give the user a clear next step
                         // ("set a supplier so a PO can be drafted") rather
                         // than a wall of disabled buttons.
@@ -1060,7 +1060,7 @@ struct MRDetailView: View {
                             }
                         }
                     }
-                    if (local.status == .ordered || local.status == .partial) && store.canReceiveMaterials {
+                    if (local.status == .ordered || local.status == .partial) && store.canPerform(action: .materialRequestReceive) {
                         actionButton("Receive Items", icon: "shippingbox.fill", color: .green) {
                             showReceiveSheet = true
                         }
