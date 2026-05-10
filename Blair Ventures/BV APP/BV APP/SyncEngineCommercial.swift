@@ -184,7 +184,7 @@ extension SyncEngine {
                     sample_data_created_at:   co.sampleDataCreatedAt.map { isoFull.string(from: $0) },
                     sample_data_created_by:   co.sampleDataCreatedBy?.uuidString
                 )
-                try await supabase.from(SupabaseTable.changeOrders).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.changeOrders)
                 if let i = store.changeOrders.firstIndex(where: { $0.id == co.id }) {
                     store.changeOrders[i].syncStatus = .synced
                 }
@@ -305,7 +305,7 @@ extension SyncEngine {
                     deleted_at:          rfi.deletedAt.map { isoFull.string(from: $0) },
                     deleted_by:          rfi.deletedBy
                 )
-                try await supabase.from(SupabaseTable.rfis).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.rfis)
                 if let i = store.rfis.firstIndex(where: { $0.id == rfi.id }) {
                     store.rfis[i].syncStatus = .synced
                 }
@@ -389,7 +389,7 @@ extension SyncEngine {
                     lines_json:              jsonString(bud.lines),
                     last_modified_by:        bud.lastModifiedBy.isEmpty ? nil : bud.lastModifiedBy
                 )
-                try await supabase.from(SupabaseTable.projectBudgets).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.projectBudgets)
                 if let i = store.projectBudgets.firstIndex(where: { $0.id == bud.id }) {
                     store.projectBudgets[i].syncStatus = .synced
                 }
@@ -501,7 +501,7 @@ extension SyncEngine {
                     notes:                         sub.notes,
                     last_modified_by:              sub.lastModifiedBy.isEmpty ? nil : sub.lastModifiedBy
                 )
-                try await supabase.from(SupabaseTable.subcontractors).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.subcontractors)
                 if let i = store.subcontractors.firstIndex(where: { $0.id == sub.id }) {
                     store.subcontractors[i].syncStatus = .synced
                 }
@@ -607,7 +607,7 @@ extension SyncEngine {
                     last_modified_by:  sc.lastModifiedBy.isEmpty ? nil : sc.lastModifiedBy,
                     linked_contract_id: sc.linkedContractID?.uuidString
                 )
-                try await supabase.from(SupabaseTable.subContracts).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.subContracts)
                 if let i = store.subContracts.firstIndex(where: { $0.id == sc.id }) {
                     store.subContracts[i].syncStatus = .synced
                 }
@@ -757,7 +757,7 @@ extension SyncEngine {
                     locked_from_tax_rate: inv.lockedFromTaxRate.map { toDouble($0) },
                     currency:         inv.currency.isEmpty ? "USD" : inv.currency
                 )
-                try await supabase.from(SupabaseTable.invoices).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.invoices)
                 if let i = store.invoices.firstIndex(where: { $0.id == inv.id }) {
                     store.invoices[i].syncStatus = .synced
                 }
@@ -1040,7 +1040,7 @@ extension SyncEngine {
                     deleted_at:       sup.deletedAt.map { isoFull.string(from: $0) },
                     deleted_by:       sup.deletedBy
                 )
-                try await supabase.from(SupabaseTable.suppliers).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.suppliers)
                 if let i = store.suppliers.firstIndex(where: { $0.id == sup.id }) {
                     store.suppliers[i].syncStatus = .synced
                 }
@@ -1464,7 +1464,7 @@ extension SyncEngine {
                     is_active:     ps.isActive,
                     sort_order:    ps.sortOrder
                 )
-                try await supabase.from(SupabaseTable.productServices).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.productServices)
                 if let i = store.productServices.firstIndex(where: { $0.id == ps.id }) {
                     store.productServices[i].syncStatus = .synced
                 }
@@ -1538,7 +1538,7 @@ extension SyncEngine {
                     override_price:     toDouble(cp.overridePrice),
                     notes:              cp.notes
                 )
-                try await supabase.from(SupabaseTable.clientPricings).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.clientPricings)
                 if let i = store.clientPricings.firstIndex(where: { $0.id == cp.id }) {
                     store.clientPricings[i].syncStatus = .synced
                 }
@@ -1628,7 +1628,9 @@ extension SyncEngine {
                 if client.sites.isEmpty {
                     print("⚠️ pushPendingClients: \(client.name) has 0 sites locally — about to write empty sites_json. If you JUST added a site, something cleared client.sites between the add and this push.")
                 }
-                try await supabase.from(SupabaseTable.clients).upsert(row).execute()
+                // self.client to disambiguate from the `client` loop var
+                // (each iteration is `for client in pending`).
+                try await self.client.upsert(row, into: SupabaseTable.clients)
                 print("✅ pushPendingClients: \(client.name) synced (sites: \(client.sites.count))")
                 var updated = client; updated.syncStatus = .synced
                 store.upsertClientSynced(updated)
@@ -1846,7 +1848,7 @@ extension SyncEngine {
                     sample_data_created_at:   est.sampleDataCreatedAt.map { isoFull.string(from: $0) },
                     sample_data_created_by:   est.sampleDataCreatedBy?.uuidString
                 )
-                try await supabase.from(SupabaseTable.estimates).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.estimates)
                 if let i = store.estimates.firstIndex(where: { $0.id == est.id }) {
                     store.estimates[i].syncStatus = .synced
                 }
@@ -2135,7 +2137,7 @@ extension SyncEngine {
                     sample_data_created_at:   q.sampleDataCreatedAt.map { isoFull.string(from: $0) },
                     sample_data_created_by:   q.sampleDataCreatedBy?.uuidString
                 )
-                try await supabase.from(SupabaseTable.quotes).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.quotes)
                 store.markQuoteSynced(id: q.id, status: .synced)
                 store.quotes.removeAll { $0.isDeleted && $0.syncStatus == .synced }
                 await MainActor.run { store.clearSyncError(id: q.id) }

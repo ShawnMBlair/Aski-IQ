@@ -203,7 +203,7 @@ extension SyncEngine {
                     created_at:      iso.string(from: rule.createdAt),
                     updated_at:      iso.string(from: Date())
                 )
-                try await supabase.from(SupabaseTable.workflowRules).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.workflowRules)
 
                 if let i = store.workflowRules.firstIndex(where: { $0.id == rule.id }) {
                     // Soft-deleted rules disappear from local state
@@ -331,7 +331,7 @@ extension SyncEngine {
                     fired_at:   iso.string(from: entry.firedAt),
                     is_deleted: entry.isDeleted
                 )
-                try await supabase.from(SupabaseTable.workflowLog).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.workflowLog)
                 if let i = store.workflowLog.firstIndex(where: { $0.id == entry.id }) {
                     store.workflowLog[i].syncStatus = .synced
                 }

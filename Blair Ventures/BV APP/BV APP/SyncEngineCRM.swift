@@ -161,7 +161,7 @@ extension SyncEngine {
                 }
                 if let d = c.deletedAt  { payload["deleted_at"]  = .string(crmIso.string(from: d)) }
                 if let s = c.deletedBy  { payload["deleted_by"]  = .string(s) }
-                try await supabase.from(SupabaseTable.crmContacts).upsert(payload).execute()
+                try await client.upsert(payload, into: SupabaseTable.crmContacts)
                 if let i = store.crmContacts.firstIndex(where: { $0.id == c.id }) {
                     store.crmContacts[i].syncStatus = .synced
                 }
@@ -296,7 +296,7 @@ extension SyncEngine {
                 if let d  = o.sampleDataCreatedAt   { payload["sample_data_created_at"]   = .string(crmIso.string(from: d)) }
                 if let id = o.sampleDataCreatedBy   { payload["sample_data_created_by"]   = .string(id.uuidString) }
 
-                try await supabase.from(SupabaseTable.crmOpportunities).upsert(payload).execute()
+                try await client.upsert(payload, into: SupabaseTable.crmOpportunities)
                 if let i = store.crmOpportunities.firstIndex(where: { $0.id == o.id }) {
                     store.crmOpportunities[i].syncStatus = .synced
                 }
@@ -415,7 +415,7 @@ extension SyncEngine {
                 if let id = t.projectID    { payload["project_id"]    = .string(id.uuidString) }
                 if let id = t.assignedToID { payload["assigned_to_id"] = .string(id.uuidString) }
 
-                try await supabase.from(SupabaseTable.crmTasks).upsert(payload).execute()
+                try await client.upsert(payload, into: SupabaseTable.crmTasks)
                 if let i = store.crmTasks.firstIndex(where: { $0.id == t.id }) {
                     store.crmTasks[i].syncStatus = .synced
                 }
@@ -507,7 +507,7 @@ extension SyncEngine {
                 if let id = a.quoteID       { payload["quote_id"]       = .string(id.uuidString) }
                 if let id = a.projectID     { payload["project_id"]     = .string(id.uuidString) }
 
-                try await supabase.from(SupabaseTable.crmActivities).upsert(payload).execute()
+                try await client.upsert(payload, into: SupabaseTable.crmActivities)
                 if let i = store.crmActivities.firstIndex(where: { $0.id == a.id }) {
                     store.crmActivities[i].syncStatus = .synced
                 }
@@ -574,7 +574,7 @@ extension SyncEngine {
                 ]
                 if let id = item.opportunityID { payload["opportunity_id"] = .string(id.uuidString) }
                 if let id = item.projectID     { payload["project_id"]     = .string(id.uuidString) }
-                try await supabase.from(SupabaseTable.crmChecklists).upsert(payload).execute()
+                try await client.upsert(payload, into: SupabaseTable.crmChecklists)
             } catch {
                 print("⚠️ \(#function) failed: \(error)")
                 CrashReporter.capture(error: error, context: ["operation": "\(#function)"])

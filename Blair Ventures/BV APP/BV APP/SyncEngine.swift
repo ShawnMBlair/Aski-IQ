@@ -2523,7 +2523,7 @@ final class SyncEngine: ObservableObject {
                 if let deletedAt = inc.deletedAt {
                     payload["deleted_at"] = .string(_isoFmt.string(from: deletedAt))
                 }
-                try await supabase.from(SupabaseTable.incidents).upsert(payload).execute()
+                try await client.upsert(payload, into: SupabaseTable.incidents)
                 var updated = inc; updated.syncStatus = .synced
                 store.upsertIncident(updated)
                 store.incidents.removeAll { $0.isDeleted && $0.syncStatus == .synced }
@@ -2595,7 +2595,7 @@ final class SyncEngine: ObservableObject {
                 if let deletedAt = cert.deletedAt {
                     payload["deleted_at"] = .string(_isoFmt.string(from: deletedAt))
                 }
-                try await supabase.from(SupabaseTable.certificates).upsert(payload).execute()
+                try await client.upsert(payload, into: SupabaseTable.certificates)
                 var updated = cert; updated.syncStatus = .synced
                 store.upsertCertificate(updated)
                 // Purge soft-deleted certs: reload, filter, save
@@ -2825,7 +2825,7 @@ final class SyncEngine: ObservableObject {
                 if let deletedAt = item.deletedAt {
                     payload["deleted_at"] = .string(_isoFmt.string(from: deletedAt))
                 }
-                try await supabase.from(SupabaseTable.equipment).upsert(payload).execute()
+                try await client.upsert(payload, into: SupabaseTable.equipment)
                 var updated = item; updated.syncStatus = .synced
                 store.updateEquipment(updated)
                 store.equipment.removeAll { $0.isDeleted && $0.syncStatus == .synced }
@@ -2885,7 +2885,7 @@ final class SyncEngine: ObservableObject {
                 // Server CHECK constraint enforces the vocabulary.
                 "service_types": .array(code.serviceTypes.map { .string($0.rawValue) })
             ]
-            try await supabase.from(SupabaseTable.companyCostCodes).upsert(payload).execute()
+            try await client.upsert(payload, into: SupabaseTable.companyCostCodes)
             // Mark synced so the loop helper below stops retrying.
             if let i = store.companyCostCodes.firstIndex(where: { $0.id == code.id }) {
                 store.companyCostCodes[i].syncStatus = .synced
@@ -3083,7 +3083,7 @@ final class SyncEngine: ObservableObject {
                     updated_at:                isoFmt.string(from: sale.updatedAt),
                     terms_default_applied:     sale.termsDefaultApplied
                 )
-                try await supabase.from(SupabaseTable.materialSales).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.materialSales)
                 if let i = store.materialSales.firstIndex(where: { $0.id == sale.id }) {
                     store.materialSales[i].syncStatus = .synced
                 }
@@ -3123,7 +3123,7 @@ final class SyncEngine: ObservableObject {
                 "skipped_count":    .double(Double(batch.skipped)),
                 "error_count":      .double(Double(batch.errorCount)),
             ]
-            try await supabase.from(SupabaseTable.importBatches).upsert(payload).execute()
+            try await client.upsert(payload, into: SupabaseTable.importBatches)
         } catch {
             print("⚠️ \(#function) failed: \(error)")
             CrashReporter.capture(error: error, context: ["operation": "\(#function)"])

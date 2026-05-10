@@ -230,7 +230,7 @@ extension SyncEngine {
                     created_at:             isoFmt.string(from: c.createdAt),
                     updated_at:             isoFmt.string(from: c.updatedAt)
                 )
-                try await supabase.from(SupabaseTable.contracts).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.contracts)
                 if let i = store.contracts.firstIndex(where: { $0.id == c.id }) {
                     store.contracts[i].syncStatus = .synced
                 }
@@ -345,7 +345,7 @@ extension SyncEngine {
                     is_deleted:       clause.isDeleted,
                     created_at:       isoFmt.string(from: clause.createdAt)
                 )
-                try await supabase.from(SupabaseTable.contractClauses).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.contractClauses)
                 if let i = store.contractClauses.firstIndex(where: { $0.id == clause.id }) {
                     store.contractClauses[i].syncStatus = .synced
                 }
@@ -562,7 +562,7 @@ extension SyncEngine {
                     created_at:          isoFmt.string(from: d.createdAt),
                     updated_at:          isoFmt.string(from: d.updatedAt)
                 )
-                try await supabase.from(SupabaseTable.complianceDocuments).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.complianceDocuments)
                 if let i = store.complianceDocuments.firstIndex(where: { $0.id == d.id }) {
                     store.complianceDocuments[i].syncStatus = .synced
                 }
@@ -736,7 +736,7 @@ extension SyncEngine {
                     updated_at:          isoFmt.string(from: w.updatedAt),
                     is_deleted:          w.isDeleted
                 )
-                try await supabase.from(SupabaseTable.lienWaivers).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.lienWaivers)
                 if let i = store.lienWaivers.firstIndex(where: { $0.id == w.id }) {
                     store.lienWaivers[i].syncStatus = .synced
                 }
@@ -788,7 +788,7 @@ extension SyncEngine {
                     created_at:       isoFmt.string(from: m.createdAt),
                     updated_at:       isoFmt.string(from: m.updatedAt)
                 )
-                try await supabase.from(SupabaseTable.contractMilestones).upsert(row).execute()
+                try await client.upsert(row, into: SupabaseTable.contractMilestones)
                 if let i = store.contractMilestones.firstIndex(where: { $0.id == m.id }) {
                     store.contractMilestones[i].syncStatus = .synced
                 }
