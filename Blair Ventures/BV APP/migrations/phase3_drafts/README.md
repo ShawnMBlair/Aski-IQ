@@ -20,12 +20,18 @@ Pattern (proven in procurement):
 | **Daily Job Reports** | ✅ DailyJobReport.swift `nextDJRNumber` | ⚠️ Blocked — see Schema Gaps below | This PR (Swift only) |
 | **Contracts** | ✅ ContractStore.swift `nextContractNumber` | ✅ `CON1_contracts_number_partial_unique.sql` | This PR |
 | **Sub-Contracts** | ✅ Subcontractor.swift `nextSubContractNumber` | ✅ `SC1_subcontracts_number_partial_unique.sql` | This PR |
-| RFIs | ⏳ Pending (per-project) | ⏳ Pending | — |
-| Material Sales | ⏳ Audit needed | ⏳ TBD | — |
+| **Material Sales** | ✅ CRMCommercialBridge.swift `nextSaleNumber` | ✅ `MS1_material_sales_number_partial_unique.sql` | This PR |
+| **Suppliers** (visibility only — no number) | n/a | n/a | This PR (SyncErrorMapper extension) |
 
 ## Apply order
 
 Migrations in this folder are independent and can be applied in any order — each one only touches its own table's index. The Swift changes that pair with each migration ship in the same commit so a fresh checkout has both halves in sync.
+
+## Phase 3 status — COMPLETE (pending prod-apply approval)
+
+All 8 modules' Swift correctness fixes are landed on `claude/xenodochial-bhaskara-96bfe2`. **7 partial-unique migration drafts** sit in this folder ready for prod application — `INV1`, `QUO1`, `CO1`, `RFI1`, `CON1`, `SC1`, `MS1`. The eighth (DJR) is blocked on the `report_number` schema-gap ticket called out below.
+
+**SyncErrorMapper coverage**: 10 of 10 commercial push functions now wire through it (was 1 at start of session) — Material Requests, Purchase Orders, Invoices, Quotes, Change Orders, RFIs, DJRs, Contracts, Sub-Contracts, Material Sales, Suppliers (the count is 11 if you split MR/PO; 10 push functions if grouped). Failed Sync UI shows per-row reasons everywhere now.
 
 ## Operator notes
 

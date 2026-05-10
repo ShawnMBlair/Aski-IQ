@@ -739,11 +739,22 @@ extension AppStore {
         materialSales.filter { !$0.isDeleted }.count
     }
 
+    /// Generate the next material-sale number. Phase 3 hardening:
+    /// already used parsed-max+1 (good), tightened with companyID +
+    /// !isDeleted filters and switched the year filter from createdAt
+    /// to saleNumber prefix-match for consistency with the other
+    /// modules. DB-side partial unique index on
+    /// (company_id, sale_number) WHERE is_deleted = false (MS1
+    /// migration) catches cross-device races.
     func nextSaleNumber() -> String {
         let year = Calendar.current.component(.year, from: Date())
+        let yearPrefix = "MS-\(year)-"
         let maxExisting = materialSales
-            .filter { Calendar.current.component(.year, from: $0.createdAt) == year }
-            .compactMap { Int($0.saleNumber.components(separatedBy: "-").last ?? "") }
+            .filter { $0.companyID == currentCompanyID && !$0.isDeleted }
+            .compactMap { ms -> Int? in
+                guard ms.saleNumber.hasPrefix(yearPrefix) else { return nil }
+                return Int(ms.saleNumber.dropFirst(yearPrefix.count))
+            }
             .max() ?? 0
         return String(format: "MS-%d-%04d", year, maxExisting + 1)
     }

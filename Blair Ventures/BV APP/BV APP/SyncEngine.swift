@@ -3053,10 +3053,17 @@ final class SyncEngine: ObservableObject {
                     store.materialSales[i].syncStatus = .synced
                 }
                 store.materialSales.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: sale.id) }
             } catch {
                 if let i = store.materialSales.firstIndex(where: { $0.id == sale.id }) {
                     store.materialSales[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: sale.id, error: error) }
+                CrashReporter.capture(error: error, context: [
+                    "operation":   "pushPendingMaterialSales",
+                    "sale_id":      sale.id.uuidString,
+                    "sale_number":  sale.saleNumber
+                ])
             }
         }
         store.objectWillChange.send()

@@ -1045,10 +1045,17 @@ extension SyncEngine {
                     store.suppliers[i].syncStatus = .synced
                 }
                 store.suppliers.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: sup.id) }
             } catch {
                 if let i = store.suppliers.firstIndex(where: { $0.id == sup.id }) {
                     store.suppliers[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: sup.id, error: error) }
+                CrashReporter.capture(error: error, context: [
+                    "operation":     "pushPendingSuppliers",
+                    "supplier_id":    sup.id.uuidString,
+                    "supplier_name":  sup.name
+                ])
             }
         }
     }
