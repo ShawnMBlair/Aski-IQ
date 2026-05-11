@@ -668,19 +668,28 @@ struct MRDetailView: View {
     @State private var rejectReasonSheetMode: RejectionMode? = nil
     @State private var rejectReasonText: String = ""
 
-    /// Differentiates the two reason-capture flows on the same sheet —
-    /// outright rejection (terminal) vs. send-back-for-changes (returns
-    /// to draft). The sheet's title + button copy adapt accordingly.
+    /// Differentiates the reason-capture flows that share the same
+    /// sheet: outright rejection (terminal, .submitted → .rejected),
+    /// send-back-for-changes (.submitted → .draft), and full
+    /// cancellation (any non-terminal → .cancelled). The sheet's
+    /// title + button copy adapt accordingly.
     enum RejectionMode: Identifiable {
         case reject
         case requestChanges
+        case cancel
         var id: String {
             switch self {
             case .reject:         return "reject"
             case .requestChanges: return "requestChanges"
+            case .cancel:         return "cancel"
             }
         }
     }
+
+    /// FIX: confirmation alert for the close action. Close doesn't
+    /// capture a reason (delivered work is just being archived) — a
+    /// simple yes/no confirmation is enough.
+    @State private var showCloseConfirm = false
 
     /// FIX (BV-MR-2026-0001): state for the View PDF preview sheet.
     /// Holds the resolved local file URL (cache hit OR fresh download
@@ -1187,6 +1196,42 @@ struct MRDetailView: View {
                                 .cornerRadius(10)
                         }
                     }
+                    // FIX: explicit Close action for delivered MRs.
+                    // Closing moves the row to the archive state so it
+                    // disappears from active pipeline views. Pre-fix
+                    // there was no way to flip .delivered → .closed
+                    // manually; delivered MRs accumulated in the
+                    // pipeline forever.
+                    if local.status == .delivered && canDelete {
+                        Button {
+                            showCloseConfirm = true
+                        } label: {
+                            Label("Close Request", systemImage: "archivebox.fill")
+                                .frame(maxWidth: .infinity).padding(.vertical, 12)
+                                .background(Color.gray.opacity(0.85))
+                                .foregroundColor(.white)
+                                .cornerRadius(10)
+                        }
+                    }
+                    // FIX: cancel action for non-terminal states.
+                    // Captures a reason via the existing rejection
+                    // sheet (reused for cancel too). Allowed from
+                    // draft / submitted / approved / ordered / partial
+                    // — anything past .delivered is closed via the
+                    // Close button instead.
+                    if [.draft, .submitted, .approved, .ordered, .partial]
+                        .contains(local.status) && canDelete {
+                        Button {
+                            rejectReasonText = ""
+                            rejectReasonSheetMode = .cancel
+                        } label: {
+                            Label("Cancel Request", systemImage: "xmark.octagon.fill")
+                                .frame(maxWidth: .infinity).padding(.vertical, 12)
+                                .background(Color.red.opacity(0.15))
+                                .foregroundColor(.red)
+                                .cornerRadius(10)
+                        }
+                    }
                     if canDelete {
                         Button(role: .destructive) { showDeleteAlert = true } label: {
                             Label("Delete", systemImage: "trash")
@@ -1259,6 +1304,17 @@ struct MRDetailView: View {
             Button("Delete", role: .destructive) { store.deleteMaterialRequest(id: local.id); dismiss() }
             Button("Cancel", role: .cancel) {}
         } message: { Text("This cannot be undone.") }
+        // FIX: close-request confirmation. Closing is reversible only
+        // via direct DB edit (admins only), so we ask explicitly.
+        .alert("Close Request?", isPresented: $showCloseConfirm) {
+            Button("Close", role: .destructive) {
+                store.closeMaterialRequest(local)
+                refreshLocal()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This archives the request. The line items, delivery photo, and audit history stay intact.")
+        }
         .alert("Over budget", isPresented: $showBudgetAlert) {
             Button("Submit Anyway") { submitDespiteBudget() }
             Button("Cancel", role: .cancel) {}
@@ -1458,42 +1514,55 @@ struct MRDetailView: View {
     /// only the title / button copy / destination action differ.
     @ViewBuilder
     private func rejectReasonSheet(mode: RejectionMode) -> some View {
-        NavigationStack {
+        let prompt: String
+        let footerText: String
+        let title: String
+        let actionLabel: String
+        switch mode {
+        case .reject:
+            prompt = "Why is this being rejected?"
+            footerText = "Stored on the request. Visible in the audit history."
+            title = "Reject Request"
+            actionLabel = "Reject"
+        case .requestChanges:
+            prompt = "What needs to change?"
+            footerText = "The requester will see this when they reopen the request to edit."
+            title = "Request Changes"
+            actionLabel = "Send Back"
+        case .cancel:
+            prompt = "Why is this being cancelled?"
+            footerText = "Stored on the request. Cancellation is terminal — the request cannot be re-opened."
+            title = "Cancel Request"
+            actionLabel = "Cancel Request"
+        }
+        return NavigationStack {
             Form {
                 Section {
-                    TextField(
-                        mode == .reject
-                            ? "Why is this being rejected?"
-                            : "What needs to change?",
-                        text: $rejectReasonText,
-                        axis: .vertical
-                    )
-                    .lineLimit(4...8)
+                    TextField(prompt, text: $rejectReasonText, axis: .vertical)
+                        .lineLimit(4...8)
                 } footer: {
-                    Text(mode == .reject
-                        ? "Stored on the request. Visible in the audit history."
-                        : "The requester will see this when they reopen the request to edit.")
-                        .font(.caption2)
+                    Text(footerText).font(.caption2)
                 }
             }
-            .navigationTitle(mode == .reject ? "Reject Request" : "Request Changes")
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { rejectReasonSheetMode = nil }
+                    Button("Dismiss") { rejectReasonSheetMode = nil }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(mode == .reject ? "Reject" : "Send Back") {
+                    Button(actionLabel) {
                         let trimmed = rejectReasonText.trimmingCharacters(in: .whitespaces)
-                        // Both paths require a non-empty reason — without one
-                        // the audit row is useless and the requester can't
-                        // act on it.
+                        // All three paths require a non-empty reason —
+                        // without one the audit row is useless.
                         guard !trimmed.isEmpty else { return }
                         switch mode {
                         case .reject:
                             store.rejectMaterialRequest(local, reason: trimmed)
                         case .requestChanges:
                             store.requestChangesOnMaterialRequest(local, notes: trimmed)
+                        case .cancel:
+                            store.cancelMaterialRequest(local, reason: trimmed)
                         }
                         rejectReasonSheetMode = nil
                     }
@@ -3183,6 +3252,12 @@ struct PODetailView: View {
     @State private var isSendingToSupplier = false
     @State private var showReceiveSheet = false
     @State private var showInvoiceMatchSheet = false
+    /// FIX: close + cancel state for the action buttons added below.
+    /// Close uses a confirmation alert (no reason needed for archive);
+    /// cancel uses a reason-capture sheet (mirrors MR cancellation).
+    @State private var showCloseConfirm = false
+    @State private var showCancelSheet = false
+    @State private var cancelReasonText = ""
 
     init(po: PurchaseOrder) {
         self.po = po
@@ -3340,6 +3415,39 @@ struct PODetailView: View {
                                 .background(Color(.secondarySystemBackground)).cornerRadius(10)
                         }
                     }
+                    // FIX: Close PO. Available when status is .received
+                    // (invoice matched OR received-with-no-invoice-yet
+                    // both qualify). Closing archives the PO.
+                    if local.status == .received
+                        && [.officeAdmin, .manager, .executive].contains(store.currentUserRole) {
+                        Button {
+                            showCloseConfirm = true
+                        } label: {
+                            Label("Close PO", systemImage: "archivebox.fill")
+                                .frame(maxWidth: .infinity).padding(.vertical, 12)
+                                .background(Color.gray.opacity(0.85))
+                                .foregroundColor(.white)
+                                .cornerRadius(10)
+                        }
+                    }
+                    // FIX: Cancel PO. Allowed from any non-terminal
+                    // state. Captures a reason on the notes field so
+                    // the audit log + supplier-facing PDF reflect the
+                    // cancellation.
+                    if [.draft, .sent, .confirmed, .partial]
+                        .contains(local.status)
+                        && [.officeAdmin, .manager, .executive].contains(store.currentUserRole) {
+                        Button {
+                            cancelReasonText = ""
+                            showCancelSheet = true
+                        } label: {
+                            Label("Cancel PO", systemImage: "xmark.octagon.fill")
+                                .frame(maxWidth: .infinity).padding(.vertical, 12)
+                                .background(Color.red.opacity(0.15))
+                                .foregroundColor(.red)
+                                .cornerRadius(10)
+                        }
+                    }
                     if store.currentUserRole == .officeAdmin || store.currentUserRole == .manager || store.currentUserRole == .executive {
                         Button(role: .destructive) { showDeleteAlert = true } label: {
                             Label("Delete", systemImage: "trash")
@@ -3386,6 +3494,49 @@ struct PODetailView: View {
             Button("Delete", role: .destructive) { store.deletePurchaseOrder(id: local.id); dismiss() }
             Button("Cancel", role: .cancel) {}
         } message: { Text("This cannot be undone.") }
+        // FIX: Close PO confirmation alert.
+        .alert("Close PO?", isPresented: $showCloseConfirm) {
+            Button("Close", role: .destructive) {
+                store.closePurchaseOrder(local)
+                refreshLocal()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Archives this PO. Line items, delivery photo, and invoice match stay intact.")
+        }
+        // FIX: Cancel PO reason-capture sheet.
+        .sheet(isPresented: $showCancelSheet) {
+            NavigationStack {
+                Form {
+                    Section {
+                        TextField("Why is this PO being cancelled?",
+                                  text: $cancelReasonText, axis: .vertical)
+                            .lineLimit(4...8)
+                    } footer: {
+                        Text("Prepended to the PO's notes and visible in the audit history. Cancellation is terminal.")
+                            .font(.caption2)
+                    }
+                }
+                .navigationTitle("Cancel PO")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button("Dismiss") { showCancelSheet = false }
+                    }
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Cancel PO") {
+                            let trimmed = cancelReasonText.trimmingCharacters(in: .whitespaces)
+                            guard !trimmed.isEmpty else { return }
+                            store.cancelPurchaseOrder(local, reason: trimmed)
+                            showCancelSheet = false
+                            refreshLocal()
+                        }
+                        .bold()
+                        .disabled(cancelReasonText.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                }
+            }
+        }
         .onAppear { refreshLocal() }
     }
 

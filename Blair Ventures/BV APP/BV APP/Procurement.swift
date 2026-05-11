@@ -701,6 +701,129 @@ extension AppStore {
         return true
     }
 
+    /// Cancel a material request from any non-terminal state.
+    /// Captures a free-text reason on `approvalNote` so the audit
+    /// trail surfaces why the cancellation happened. Terminal states
+    /// (.cancelled, .closed, .rejected, .delivered) are rejected with
+    /// a clear error — once a request is in those, cancellation is a
+    /// no-op (delivered work can't be "cancelled," it can only be
+    /// .closed).
+    func cancelMaterialRequest(_ request: MaterialRequest, reason: String) {
+        // Allow the requester to cancel their own draft. Other states
+        // require an approver-tier role since they affect downstream
+        // pipeline visibility (approvers tracking commitments,
+        // accounting watching open POs, etc).
+        let isOwnDraft = request.status == .draft
+            && request.requestedByID == currentUser?.id
+        if !isOwnDraft {
+            guard requireRole([.projectManager, .officeAdmin, .manager, .executive],
+                              action: "cancel_material_request") else { return }
+        }
+        guard let idx = materialRequests.firstIndex(where: { $0.id == request.id }) else { return }
+        // Terminal-state guard. Cancelling a delivered MR would
+        // corrupt the cost roll-up; cancelling an already-cancelled
+        // / rejected / closed one is a no-op the UI shouldn't even
+        // surface.
+        switch request.status {
+        case .cancelled, .closed, .rejected, .delivered:
+            ToastService.shared.warning("This request is already in a terminal state.")
+            return
+        default:
+            break
+        }
+
+        var updated = request
+        updated.status        = .cancelled
+        updated.approvalNote  = reason
+        updated.updatedAt     = Date()
+        updated.syncStatus    = .pending
+        objectWillChange.send()
+        materialRequests[idx] = updated
+        Task { await SyncEngine.shared.pushPendingMaterialRequests() }
+        ToastService.shared.success("Request \(request.requestNumber) cancelled.")
+    }
+
+    /// Close a delivered material request — moves it into the archive
+    /// state. Anything still .partial or .ordered should be moved to
+    /// .delivered via the normal receive flow first; closing those
+    /// directly would orphan their pending line items. .delivered is
+    /// the only valid source state.
+    func closeMaterialRequest(_ request: MaterialRequest) {
+        guard requireRole([.projectManager, .officeAdmin, .manager, .executive],
+                          action: "close_material_request") else { return }
+        guard let idx = materialRequests.firstIndex(where: { $0.id == request.id }) else { return }
+        guard request.status == .delivered else {
+            ToastService.shared.warning(
+                "Only delivered requests can be closed. Receive the items first."
+            )
+            return
+        }
+
+        var updated = request
+        updated.status     = .closed
+        updated.closedAt   = Date()
+        updated.updatedAt  = Date()
+        updated.syncStatus = .pending
+        objectWillChange.send()
+        materialRequests[idx] = updated
+        Task { await SyncEngine.shared.pushPendingMaterialRequests() }
+        ToastService.shared.success("Request \(request.requestNumber) closed.")
+    }
+
+    /// Cancel a Purchase Order from any non-terminal state. Mirrors
+    /// the MR cancellation flow. Captures a reason on `notes` so the
+    /// supplier-facing PDF + audit trail surface why the PO was killed.
+    func cancelPurchaseOrder(_ po: PurchaseOrder, reason: String) {
+        guard requireRole([.projectManager, .officeAdmin, .manager, .executive],
+                          action: "cancel_purchase_order") else { return }
+        guard let idx = purchaseOrders.firstIndex(where: { $0.id == po.id }) else { return }
+        switch po.status {
+        case .cancelled, .closed, .received:
+            ToastService.shared.warning("This PO is already in a terminal state.")
+            return
+        default:
+            break
+        }
+
+        var updated = po
+        updated.status     = .cancelled
+        // Append the reason as a notes prefix so the original supplier
+        // notes (delivery instructions, etc.) aren't clobbered.
+        let cancelLine = "CANCELLED: \(reason)"
+        updated.notes = updated.notes.isEmpty ? cancelLine : "\(cancelLine)\n\n\(updated.notes)"
+        updated.updatedAt  = Date()
+        updated.syncStatus = .pending
+        objectWillChange.send()
+        purchaseOrders[idx] = updated
+        Task { await SyncEngine.shared.pushPendingPurchaseOrders() }
+        ToastService.shared.success("PO \(po.poNumber) cancelled.")
+    }
+
+    /// Close a received Purchase Order — moves it from .received to
+    /// .closed (archive state). Used after invoice matching is done
+    /// and all financial commitments are settled. Anything not yet
+    /// fully received should be received first via the standard flow.
+    func closePurchaseOrder(_ po: PurchaseOrder) {
+        guard requireRole([.projectManager, .officeAdmin, .manager, .executive],
+                          action: "close_purchase_order") else { return }
+        guard let idx = purchaseOrders.firstIndex(where: { $0.id == po.id }) else { return }
+        guard po.status == .received else {
+            ToastService.shared.warning(
+                "Only received POs can be closed. Receive all items first."
+            )
+            return
+        }
+
+        var updated = po
+        updated.status     = .closed
+        updated.updatedAt  = Date()
+        updated.syncStatus = .pending
+        objectWillChange.send()
+        purchaseOrders[idx] = updated
+        Task { await SyncEngine.shared.pushPendingPurchaseOrders() }
+        ToastService.shared.success("PO \(po.poNumber) closed.")
+    }
+
     // MARK: Material Request Queries
 
     func materialRequests(for projectID: UUID) -> [MaterialRequest] {
