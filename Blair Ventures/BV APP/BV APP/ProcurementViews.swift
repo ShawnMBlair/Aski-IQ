@@ -1105,6 +1105,26 @@ struct MRDetailView: View {
                             showReceiveSheet = true
                         }
                     }
+                    // FIX (BV-MR-2026-0001 follow-up): "Share / Save PDF"
+                    // works regardless of supplier. Generates the
+                    // approval PDF locally and hands its URL to the
+                    // system share sheet via ShareLink so the user can
+                    // email, save to Files, AirDrop, or print without
+                    // having to set a supplier first. Hidden until the
+                    // request has line items (nothing to render).
+                    #if canImport(UIKit)
+                    if !local.lineItems.isEmpty,
+                       let pdfURL = MaterialRequestPDFGenerator.shared.prepareSharePDF(for: local, store: store) {
+                        ShareLink(item: pdfURL,
+                                  preview: SharePreview("\(local.requestNumber).pdf")) {
+                            Label("Share / Save PDF", systemImage: "square.and.arrow.up")
+                                .frame(maxWidth: .infinity).padding(.vertical, 12)
+                                .background(Color.blue)
+                                .foregroundColor(.white)
+                                .cornerRadius(10)
+                        }
+                    }
+                    #endif
                     if canEditByRole {
                         Button { showEdit = true } label: {
                             Label("Edit Request", systemImage: "pencil")
@@ -1284,6 +1304,11 @@ struct MRDetailView: View {
         var po = PurchaseOrder(poNumber: store.nextPONumber(), projectID: local.projectID)
         po.materialRequestID = local.id
         po.lineItems         = local.lineItems
+        // FIX (BV-MR-2026-0001): propagate the MR's opportunity onto
+        // the PO so server-side NOT NULL on purchase_orders.opportunity_id
+        // is satisfied. Without this the PO push fails silently and
+        // the user thinks "Create PO Manually" did nothing.
+        po.opportunityID     = local.opportunityID
         if let proj = local.projectID.flatMap({ pid in store.projects.first { $0.id == pid } }) {
             po.deliveryAddress = proj.siteAddress ?? ""
         }
@@ -3497,7 +3522,30 @@ struct POCreateEditView: View {
         item.notes            = notes
         item.status           = status
         item.updatedAt        = Date()
+        // (item.opportunityID preserved from the source PO / newPOFromRequest;
+        // the save form intentionally doesn't expose it as an editable field.)
         isNew ? store.addPurchaseOrder(item) : store.updatePurchaseOrder(item)
+        // FIX (BV-MR-2026-0001 follow-up): user-visible confirmation
+        // that the action worked. Pre-fix the sheet dismissed silently
+        // and the user had no way to tell if the PO landed. Combined
+        // with the opportunity_id push fix, this also exposes any
+        // post-save sync error via a short-delay check against the
+        // store's per-row syncErrors map.
+        let savedID = item.id
+        let savedNumber = item.poNumber
+        ToastService.shared.success(isNew
+            ? "Purchase Order \(savedNumber) created."
+            : "Purchase Order \(savedNumber) updated.")
+        Task { @MainActor in
+            // Give the push a brief window to complete before we check
+            // syncErrors. A failed push lands in store.syncErrors[id]
+            // via the SyncErrorMapper path; if we find it, surface the
+            // user-readable reason on top of the success toast.
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            if let err = store.syncErrors[savedID] {
+                ToastService.shared.error("PO \(savedNumber) couldn't sync — \(err.reason)")
+            }
+        }
         dismiss()
     }
 

@@ -1083,6 +1083,12 @@ extension SyncEngine {
             struct Row: Codable {
                 let id, request_number, status: String
                 let project_id, supplier_id, material_sales_id, requested_by_employee_id: String?
+                /// FIX (BV-MR-2026-0001): persist CRM linkage. The
+                /// auto-link trigger fills this server-side; pre-fix
+                /// the iOS pull dropped it, so the next
+                /// `newPOFromRequest` had a nil opportunity to copy
+                /// onto the PO → PO push failed NOT NULL.
+                let opportunity_id: String?
                 let destination_type: String?
                 let requested_by_name, requested_by_email: String?
                 let request_date, required_by_date: String?
@@ -1121,6 +1127,7 @@ extension SyncEngine {
                     .flatMap { MaterialRequestDestinationType(rawValue: $0) } ?? .internalUse
                 mr.materialSaleID   = row.material_sales_id.flatMap { UUID(uuidString: $0) }
                 mr.supplierID       = row.supplier_id.flatMap { UUID(uuidString: $0) }
+                mr.opportunityID    = row.opportunity_id.flatMap { UUID(uuidString: $0) }
                 mr.requestedByID    = row.requested_by_employee_id.flatMap { UUID(uuidString: $0) }
                 mr.requestedByName  = row.requested_by_name ?? ""
                 mr.requestedByEmail = row.requested_by_email
@@ -1264,6 +1271,10 @@ extension SyncEngine {
                 let id, po_number, status: String
                 let project_id, supplier_id: String?
                 let supplier_name: String?
+                /// Same fix as the push side — pull was also dropping
+                /// opportunity_id, so even POs that survived push lost
+                /// their CRM linkage on every device sync.
+                let opportunity_id: String?
                 let issue_date, required_date, received_date: String?
                 let delivery_address, terms, notes: String?
                 let tax_rate: Double
@@ -1297,6 +1308,7 @@ extension SyncEngine {
                 po.status          = POStatus(rawValue: row.status) ?? .draft
                 po.supplierID      = row.supplier_id.flatMap { UUID(uuidString: $0) }
                 po.supplierName    = row.supplier_name   ?? ""
+                po.opportunityID   = row.opportunity_id.flatMap { UUID(uuidString: $0) }
                 po.issueDate       = parseDate(row.issue_date) ?? Date()
                 po.requiredDate    = parseDate(row.required_date)
                 po.receivedDate    = parseDate(row.received_date)
@@ -1335,6 +1347,13 @@ extension SyncEngine {
                 struct Row: Codable {
                     let id, company_id, po_number, status: String
                     let project_id, supplier_id, supplier_name: String?
+                    /// FIX (BV-MR-2026-0001 follow-up): persist
+                    /// opportunity linkage. `purchase_orders.opportunity_id`
+                    /// is NOT NULL on prod; the pre-fix Row struct omitted
+                    /// the field entirely, so every push silently failed
+                    /// with a 23502 constraint violation and the
+                    /// resulting PO never landed on the server.
+                    let opportunity_id: String?
                     let issue_date, required_date, received_date: String?
                     let delivery_address, terms, notes: String?
                     let tax_rate: Double
@@ -1358,6 +1377,7 @@ extension SyncEngine {
                     project_id:       po.projectID?.uuidString,
                     supplier_id:      po.supplierID?.uuidString,
                     supplier_name:    po.supplierName.isEmpty ? nil : po.supplierName,
+                    opportunity_id:   po.opportunityID?.uuidString,
                     issue_date:       isoDateFmt.string(from: po.issueDate),
                     required_date:    po.requiredDate.map  { isoDateFmt.string(from: $0) },
                     received_date:    po.receivedDate.map  { isoDateFmt.string(from: $0) },

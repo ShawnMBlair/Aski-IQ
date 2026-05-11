@@ -195,6 +195,15 @@ struct MaterialRequest: Identifiable, Codable, Equatable {
     // Procurement target
     var supplierID:      UUID? = nil
 
+    /// CRM linkage. `material_requests.opportunity_id` is NOT NULL on
+    /// prod (set by the auto-link trigger via project_id or
+    /// material_sales_id when supplied; back-filled from
+    /// project.opportunity_id for internal/legacy rows). Pre-fix this
+    /// field was missing from the iOS struct, so any downstream
+    /// derivation (e.g., propagating onto a PO via `newPOFromRequest`)
+    /// had nothing to copy and the PO push silently failed.
+    var opportunityID:   UUID? = nil
+
     // Content
     var lineItems:       [MaterialLineItem] = []
     var notes:           String = ""
@@ -319,6 +328,14 @@ struct PurchaseOrder: Identifiable, Codable, Equatable {
     var projectID:     UUID?
     var supplierID:    UUID?
     var supplierName:  String = ""
+
+    /// CRM linkage. Pre-fix this field was missing from the iOS struct,
+    /// so PO pushes omitted `opportunity_id` from the JSON payload —
+    /// which Postgrest substituted as NULL, hitting the NOT NULL
+    /// constraint on `purchase_orders.opportunity_id` and silently
+    /// failing every push. Mirrors the same field on MaterialRequest
+    /// and is propagated from the source MR via `newPOFromRequest()`.
+    var opportunityID: UUID? = nil
 
     // Dates
     var issueDate:     Date   = Date()
@@ -1275,6 +1292,11 @@ extension AppStore {
         po.materialRequestID  = mr.id
         po.lineItems          = mr.lineItems
         po.requiredDate       = mr.requiredByDate
+        // FIX (BV-MR-2026-0001): propagate opportunity linkage so the
+        // auto-draft path also satisfies purchase_orders.opportunity_id
+        // (NOT NULL on prod). Pre-fix this path didn't carry the
+        // opportunity over, so even auto-drafted POs failed to push.
+        po.opportunityID      = mr.opportunityID
         // Pull delivery address from the project's site address when linked,
         // otherwise fall back to the MR's site location field.
         po.deliveryAddress = (mr.projectID

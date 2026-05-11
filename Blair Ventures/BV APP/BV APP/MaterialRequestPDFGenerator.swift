@@ -198,6 +198,53 @@ final class MaterialRequestPDFGenerator {
         }
     }
 
+    // MARK: - Share PDF (no supplier required)
+
+    /// FIX (BV-MR-2026-0001 follow-up): returns a file URL that callers
+    /// can hand to a SwiftUI `ShareLink` for system-share-sheet
+    /// distribution. Unlike `emailApprovalPDF`, this path works even
+    /// when no supplier is set — useful for internal-use MRs (warehouse
+    /// stock, shop supplies) where the user just wants to email or
+    /// save the request PDF without a designated recipient.
+    ///
+    /// Behavior:
+    ///   - If the MR already has a generated PDF on disk, returns that
+    ///     URL.
+    ///   - Otherwise, renders a fresh PDF, writes to a stable temp
+    ///     location keyed off the MR id (so repeat shares reuse the
+    ///     same file instead of accumulating copies), returns its URL.
+    ///   - Returns nil only if line items are empty (no content to
+    ///     render) or the write fails.
+    func prepareSharePDF(for mr: MaterialRequest, store: AppStore) -> URL? {
+        guard !mr.lineItems.isEmpty else { return nil }
+        let docDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+
+        // Reuse the on-disk approval PDF if one exists.
+        if let storedFileName = mr.pdfStoragePath {
+            let url = docDir.appendingPathComponent(storedFileName)
+            if FileManager.default.fileExists(atPath: url.path) {
+                return url
+            }
+        }
+
+        // Render fresh and write to a stable per-MR cache location.
+        // Using a deterministic filename means re-sharing the same MR
+        // overwrites the cached copy instead of leaving a trail of
+        // similarly-named files in documents/.
+        let pdfData = freshlyRenderedPDF(for: mr, store: store)
+        let safeNumber = mr.requestNumber
+            .components(separatedBy: .whitespacesAndNewlines).joined(separator: "_")
+        let filename = "MR_\(safeNumber)_share.pdf"
+        let url = docDir.appendingPathComponent(filename)
+        do {
+            try pdfData.write(to: url, options: .atomic)
+            return url
+        } catch {
+            print("⚠️ prepareSharePDF failed: \(error)")
+            return nil
+        }
+    }
+
     private func freshlyRenderedPDF(for mr: MaterialRequest, store: AppStore) -> Data {
         let destinationName = resolveDestinationName(for: mr, store: store)
         let supplierName    = mr.supplierID.flatMap { sid in
