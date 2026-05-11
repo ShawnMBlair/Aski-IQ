@@ -371,8 +371,10 @@ extension AppStore {
     func nextQuoteNumber() -> String {
         let year = Calendar.current.component(.year, from: Date())
         let yearPrefix = "Q-\(year)-"
+        // FIX: monotonic numbering across deletes — see
+        // AppStore.nextMaterialRequestNumber for the full rationale.
         let existingNumbers = quotes
-            .filter { $0.companyID == currentCompanyID && !$0.isDeleted }
+            .filter { $0.companyID == currentCompanyID }
             .compactMap { q -> Int? in
                 guard q.jobNumber.hasPrefix(yearPrefix) else { return nil }
                 return Int(q.jobNumber.dropFirst(yearPrefix.count))

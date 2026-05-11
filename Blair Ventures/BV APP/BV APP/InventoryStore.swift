@@ -193,14 +193,15 @@ extension AppStore {
 
     /// Auto-generates the next transfer number scoped to (company, year).
     /// Format: BV-XFR-YYYY-NNNN. Mirrors the Phase 3 number-gen pattern
-    /// (parsed-max+1, soft-delete excluded, multi-tenant scope).
+    /// (parsed-max+1, MONOTONIC across deletes, multi-tenant scope).
     func nextTransferNumber() -> String {
         let prefix = (AppSettings.shared.companyPrefix.isEmpty
                       ? "BV" : AppSettings.shared.companyPrefix)
         let year   = Calendar.current.component(.year, from: Date())
         let yearPrefix = "\(prefix)-XFR-\(year)-"
+        // FIX: monotonic numbering — see nextMaterialRequestNumber.
         let highest = inventoryTransfers
-            .filter { $0.companyID == currentCompanyID && !$0.isDeleted }
+            .filter { $0.companyID == currentCompanyID }
             .compactMap { t -> Int? in
                 guard t.transferNumber.hasPrefix(yearPrefix) else { return nil }
                 return Int(t.transferNumber.dropFirst(yearPrefix.count))

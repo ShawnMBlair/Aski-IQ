@@ -426,8 +426,9 @@ extension AppStore {
         let prefix = AppSettings.shared.companyPrefix.isEmpty ? "BV" : AppSettings.shared.companyPrefix
         let year   = Calendar.current.component(.year, from: Date())
         let yearPrefix = "\(prefix)-SC-\(year)-"
+        // FIX: monotonic numbering — see nextMaterialRequestNumber.
         let highest = subContracts
-            .filter { $0.companyID == currentCompanyID && !$0.isDeleted }
+            .filter { $0.companyID == currentCompanyID }
             .compactMap { sc -> Int? in
                 guard sc.contractNumber.hasPrefix(yearPrefix) else { return nil }
                 return Int(sc.contractNumber.dropFirst(yearPrefix.count))

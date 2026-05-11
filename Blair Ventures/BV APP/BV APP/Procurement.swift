@@ -1061,8 +1061,19 @@ extension AppStore {
         let prefix = AppSettings.shared.companyPrefix.isEmpty ? "BV" : AppSettings.shared.companyPrefix
         let year   = Calendar.current.component(.year, from: Date())
         let yearPrefix = "\(prefix)-MR-\(year)-"
+        // FIX (BV-MR-2026-0001 follow-up): monotonic numbering across
+        // deletes. Pre-fix the filter `!$0.isDeleted` excluded
+        // soft-deleted rows from the max, so deleting an MR would
+        // free up its number — the next save would silently re-use
+        // it. Users saw "every new request starts with BV-MR-2026-0001"
+        // because they'd delete and re-create. Now we walk EVERY row
+        // (tenant + year scoped) so the high-water mark is durable
+        // across deletes. The partial UNIQUE index on
+        // (company_id, request_number) WHERE is_deleted=false still
+        // accepts the new number — it just won't collide because we
+        // always emit one above the historical max.
         let highest = materialRequests
-            .filter { $0.companyID == currentCompanyID && !$0.isDeleted }
+            .filter { $0.companyID == currentCompanyID }
             .compactMap { mr -> Int? in
                 guard mr.requestNumber.hasPrefix(yearPrefix) else { return nil }
                 return Int(mr.requestNumber.dropFirst(yearPrefix.count))
@@ -1466,8 +1477,9 @@ extension AppStore {
         let prefix = AppSettings.shared.companyPrefix.isEmpty ? "BV" : AppSettings.shared.companyPrefix
         let year   = Calendar.current.component(.year, from: Date())
         let yearPrefix = "\(prefix)-PO-\(year)-"
+        // FIX: monotonic numbering — see nextMaterialRequestNumber.
         let highest = purchaseOrders
-            .filter { $0.companyID == currentCompanyID && !$0.isDeleted }
+            .filter { $0.companyID == currentCompanyID }
             .compactMap { po -> Int? in
                 guard po.poNumber.hasPrefix(yearPrefix) else { return nil }
                 return Int(po.poNumber.dropFirst(yearPrefix.count))

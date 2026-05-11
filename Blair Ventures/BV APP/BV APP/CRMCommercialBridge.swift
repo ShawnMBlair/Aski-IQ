@@ -749,8 +749,9 @@ extension AppStore {
     func nextSaleNumber() -> String {
         let year = Calendar.current.component(.year, from: Date())
         let yearPrefix = "MS-\(year)-"
+        // FIX: monotonic numbering — see nextMaterialRequestNumber.
         let maxExisting = materialSales
-            .filter { $0.companyID == currentCompanyID && !$0.isDeleted }
+            .filter { $0.companyID == currentCompanyID }
             .compactMap { ms -> Int? in
                 guard ms.saleNumber.hasPrefix(yearPrefix) else { return nil }
                 return Int(ms.saleNumber.dropFirst(yearPrefix.count))
