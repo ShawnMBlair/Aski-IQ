@@ -167,10 +167,12 @@ extension SyncEngine {
                     store.crmContacts[i].syncStatus = .synced
                 }
                 store.crmContacts.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: c.id) }
             } catch {
                 if let i = store.crmContacts.firstIndex(where: { $0.id == c.id }) {
                     store.crmContacts[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: c.id, error: error) }
             }
         }
         if !pending.isEmpty { store.saveCRMData() }
@@ -304,10 +306,12 @@ extension SyncEngine {
                     store.crmOpportunities[i].syncStatus = .synced
                 }
                 store.crmOpportunities.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: o.id) }
             } catch {
                 if let i = store.crmOpportunities.firstIndex(where: { $0.id == o.id }) {
                     store.crmOpportunities[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: o.id, error: error) }
             }
         }
         if !pending.isEmpty { store.saveCRMData() }
@@ -426,10 +430,12 @@ extension SyncEngine {
                     store.crmTasks[i].syncStatus = .synced
                 }
                 store.crmTasks.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: t.id) }
             } catch {
                 if let i = store.crmTasks.firstIndex(where: { $0.id == t.id }) {
                     store.crmTasks[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: t.id, error: error) }
             }
         }
         if !pending.isEmpty { store.saveCRMData() }
@@ -517,10 +523,12 @@ extension SyncEngine {
                 if let i = store.crmActivities.firstIndex(where: { $0.id == a.id }) {
                     store.crmActivities[i].syncStatus = .synced
                 }
+                await MainActor.run { store.clearSyncError(id: a.id) }
             } catch {
                 if let i = store.crmActivities.firstIndex(where: { $0.id == a.id }) {
                     store.crmActivities[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: a.id, error: error) }
             }
         }
         if !pending.isEmpty { store.saveCRMData() }
