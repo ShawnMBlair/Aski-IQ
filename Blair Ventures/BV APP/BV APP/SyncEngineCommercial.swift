@@ -69,6 +69,8 @@ extension SyncEngine {
         do {
             struct Row: Codable {
                 let id, number, title, project_id, type, status: String
+                /// FIX (debug audit): decode CRM linkage.
+                let opportunity_id: String?
                 let description: String?
                 let reason, notes: String?
                 let cost_impact: Double
@@ -102,6 +104,7 @@ extension SyncEngine {
                 var co = ChangeOrder(number: row.number, title: row.title, projectID: projID)
                 co.id                    = uuid
                 co.companyID             = row.company_id.flatMap(UUID.init(uuidString:))
+                co.opportunityID         = row.opportunity_id.flatMap { UUID(uuidString: $0) }
                 co.type                  = ChangeOrderType(rawValue: row.type)     ?? .other
                 co.status                = ChangeOrderStatus(rawValue: row.status) ?? .draft
                 co.description           = row.description ?? ""
@@ -140,6 +143,12 @@ extension SyncEngine {
             do {
                 struct Row: Codable {
                     let id, company_id, number, title, project_id, type, status: String
+                    /// FIX (debug audit): persist CRM linkage.
+                    /// change_orders.opportunity_id is NOT NULL on prod;
+                    /// pre-fix the Row struct omitted the field, so
+                    /// every CO push silently failed and never landed
+                    /// on the server.
+                    let opportunity_id: String?
                     let description, reason, notes: String?
                     let cost_impact: Double
                     let schedule_impact_days: Int
@@ -165,6 +174,7 @@ extension SyncEngine {
                     project_id:              co.projectID.uuidString,
                     type:                    co.type.rawValue,
                     status:                  co.status.rawValue,
+                    opportunity_id:          co.opportunityID?.uuidString,
                     description:             co.description.isEmpty ? nil : co.description,
                     reason:                  co.reason,
                     notes:                   co.notes,
@@ -642,6 +652,9 @@ extension SyncEngine {
             struct Row: Codable {
                 let id, invoice_number, status: String
                 let project_id, client_id: String?
+                /// FIX (debug audit): decode CRM linkage so the next
+                /// edit pushes it back correctly.
+                let opportunity_id: String?
                 let bill_to_name, bill_to_address: String?
                 let tax_rate: Double
                 let invoice_date, due_date: String?
@@ -682,6 +695,7 @@ extension SyncEngine {
                 inv.companyID    = row.company_id.flatMap(UUID.init(uuidString:))
                 inv.status       = InvoiceStatus(rawValue: row.status) ?? .draft
                 inv.clientID     = row.client_id.flatMap { UUID(uuidString: $0) }
+                inv.opportunityID = row.opportunity_id.flatMap { UUID(uuidString: $0) }
                 inv.billToName   = row.bill_to_name    ?? ""
                 inv.billToAddress = row.bill_to_address ?? ""
                 inv.taxRate      = fromDouble(row.tax_rate)
@@ -719,6 +733,13 @@ extension SyncEngine {
                 struct Row: Codable {
                     let id, company_id, invoice_number, status: String
                     let project_id, client_id: String?
+                    /// FIX (debug audit follow-up): persist CRM linkage.
+                    /// `invoices.opportunity_id` is NOT NULL on prod;
+                    /// pre-fix the Row struct omitted the field, so every
+                    /// invoice push silently failed the NOT NULL
+                    /// constraint and the row never landed on the server.
+                    /// Same bug class as MR + PO had before commit af8a23b.
+                    let opportunity_id: String?
                     let bill_to_name, bill_to_address: String?
                     let tax_rate: Double
                     let invoice_date, due_date: String?
@@ -743,6 +764,7 @@ extension SyncEngine {
                     status:           inv.status.rawValue,
                     project_id:       inv.projectID?.uuidString,
                     client_id:        inv.clientID?.uuidString,
+                    opportunity_id:   inv.opportunityID?.uuidString,
                     bill_to_name:     inv.billToName.isEmpty    ? nil : inv.billToName,
                     bill_to_address:  inv.billToAddress.isEmpty ? nil : inv.billToAddress,
                     tax_rate:         toDouble(inv.taxRate),

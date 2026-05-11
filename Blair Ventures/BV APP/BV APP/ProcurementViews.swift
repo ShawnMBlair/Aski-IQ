@@ -1744,7 +1744,13 @@ struct MRCreateEditView: View {
     /// multi-page PDF to Supabase Storage on the request row. Optional —
     /// not in the validation gate.
     private var receiptScanSection: some View {
-        Section {
+        // FIX (debug audit): gate the scanner on
+        // VNDocumentCameraViewController.isSupported. Pre-fix the
+        // button was always shown — on Mac Catalyst without a usable
+        // camera (most desktops), tapping it opened a broken/empty
+        // VisionKit sheet. The scanner is iOS-only in practice.
+        let scannerAvailable = VNDocumentCameraViewController.isSupported
+        return Section {
             if isUploadingReceipt {
                 HStack {
                     ProgressView()
@@ -1755,27 +1761,36 @@ struct MRCreateEditView: View {
                     Label("Receipt attached", systemImage: "doc.text.fill")
                         .foregroundColor(.green)
                     Spacer()
-                    Button("Replace") { showDocumentScanner = true }
-                        .font(.caption)
+                    if scannerAvailable {
+                        Button("Replace") { showDocumentScanner = true }
+                            .font(.caption)
+                    }
                 }
                 Button(role: .destructive) {
                     receiptScanPath = nil
                 } label: {
                     Label("Remove", systemImage: "trash")
                 }
-            } else {
+            } else if scannerAvailable {
                 Button {
                     showDocumentScanner = true
                 } label: {
                     Label("Scan Receipt or Quote", systemImage: "doc.viewfinder")
                         .foregroundColor(.blue)
                 }
+            } else {
+                Label("Document scanner needs an iPhone-class camera. Attach a receipt PDF from another device instead.",
+                      systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         } header: {
             Text("Reference Document")
         } footer: {
-            Text("Scan a supplier receipt, quote, or hand-written list. Auto-detects edges and supports multi-page capture.")
-                .font(.caption2)
+            if scannerAvailable {
+                Text("Scan a supplier receipt, quote, or hand-written list. Auto-detects edges and supports multi-page capture.")
+                    .font(.caption2)
+            }
         }
     }
 
@@ -3007,7 +3022,9 @@ struct POInvoiceMatchSheet: View {
     }
 
     private var scanSection: some View {
-        Section {
+        // FIX (debug audit): same scanner gate as MRCreateEditView.
+        let scannerAvailable = VNDocumentCameraViewController.isSupported
+        return Section {
             if isUploadingScan {
                 HStack {
                     ProgressView()
@@ -3018,21 +3035,30 @@ struct POInvoiceMatchSheet: View {
                     Label("Invoice attached", systemImage: "doc.text.fill")
                         .foregroundColor(.green)
                     Spacer()
-                    Button("Replace") { showScanner = true }.font(.caption)
+                    if scannerAvailable {
+                        Button("Replace") { showScanner = true }.font(.caption)
+                    }
                 }
-            } else {
+            } else if scannerAvailable {
                 Button {
                     showScanner = true
                 } label: {
                     Label("Scan Supplier Invoice", systemImage: "doc.viewfinder")
                         .foregroundColor(.blue)
                 }
+            } else {
+                Label("Invoice scanner needs an iPhone-class camera. Attach via another device, or proceed without — match data can still be entered manually.",
+                      systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         } header: {
             Text("Invoice Document")
         } footer: {
-            Text("Multi-page PDF stored on the PO. Optional but recommended for audit trail.")
-                .font(.caption2)
+            if scannerAvailable {
+                Text("Multi-page PDF stored on the PO. Optional but recommended for audit trail.")
+                    .font(.caption2)
+            }
         }
     }
 

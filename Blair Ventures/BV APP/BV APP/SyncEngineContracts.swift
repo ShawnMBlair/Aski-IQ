@@ -32,6 +32,8 @@ extension SyncEngine {
                 let external_id, contract_number: String?
                 let counterparty_type: String?
                 let counterparty_id, counterparty_email: String?
+                /// FIX (debug audit): decode CRM linkage.
+                let opportunity_id: String?
                 let project_id, parent_contract_id, quote_id, supersedes_contract_id: String?
                 let contract_value: Double?
                 let currency: String
@@ -96,6 +98,7 @@ extension SyncEngine {
                 c.counterpartyID        = row.counterparty_id.flatMap(UUID.init(uuidString:))
                 c.counterpartyEmail     = row.counterparty_email
                 c.projectID             = row.project_id.flatMap(UUID.init(uuidString:))
+                c.opportunityID         = row.opportunity_id.flatMap(UUID.init(uuidString:))
                 c.parentContractID      = row.parent_contract_id.flatMap(UUID.init(uuidString:))
                 c.quoteID               = row.quote_id.flatMap(UUID.init(uuidString:))
                 c.supersedesContractID  = row.supersedes_contract_id.flatMap(UUID.init(uuidString:))
@@ -163,6 +166,11 @@ extension SyncEngine {
                     let external_id, contract_number: String?
                     let counterparty_type: String?
                     let counterparty_id, counterparty_email: String?
+                    /// FIX (debug audit): persist CRM linkage.
+                    /// contracts.opportunity_id is NOT NULL on prod;
+                    /// pre-fix the Row struct omitted the field, so
+                    /// every contract push silently failed.
+                    let opportunity_id: String?
                     let project_id, parent_contract_id, quote_id, supersedes_contract_id: String?
                     let contract_value: Double?
                     let currency: String
@@ -196,6 +204,7 @@ extension SyncEngine {
                     counterparty_type:      c.counterpartyType?.rawValue,
                     counterparty_id:        c.counterpartyID?.uuidString,
                     counterparty_email:     c.counterpartyEmail,
+                    opportunity_id:         c.opportunityID?.uuidString,
                     project_id:             c.projectID?.uuidString,
                     parent_contract_id:     c.parentContractID?.uuidString,
                     quote_id:               c.quoteID?.uuidString,

@@ -131,6 +131,13 @@ struct Invoice: BaseModel {
     var invoiceNumber:  String
     var projectID:      UUID?
     var clientID:       UUID?
+    /// CRM linkage. `invoices.opportunity_id` is NOT NULL on prod
+    /// (set by the auto-link trigger via project_id or quote_id).
+    /// Pre-fix this field was missing from the iOS struct — every
+    /// push to prod silently failed NOT NULL constraint and the
+    /// row never landed on the server. Same bug class as
+    /// MR + PO had before commit af8a23b.
+    var opportunityID:  UUID? = nil
     /// Phase 7 audit fix: forward link to the source Quote (if the
     /// invoice was generated from one). Pairs with the existing
     /// `Quote.projectID` and lets reporting trace
