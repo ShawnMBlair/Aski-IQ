@@ -2396,15 +2396,20 @@ struct ReceiveItemsSheet: View {
 
     @State private var quantities: [UUID: Decimal]
 
-    // Photo state — selected by PhotosPicker, decoded into UIImage for the
-    // thumbnail, uploaded on Confirm. existingPhotoPath holds the URL
-    // already saved on the entity from a prior partial receive — so a
-    // receiver who's added the photo earlier doesn't have to re-upload
-    // to finalize.
+    // Photo state — settable from either the live camera or the photo
+    // library. existingPhotoPath holds the URL already saved on the
+    // entity from a prior partial receive — so a receiver who's added
+    // the photo earlier doesn't have to re-upload to finalize.
     @State private var photoItem: PhotosPickerItem? = nil
     @State private var photoImage: UIImage? = nil
     @State private var existingPhotoPath: String?
     @State private var isUploading = false
+    /// FIX (BV-MR-2026-0001 follow-up): toggles the live-camera
+    /// `UIImagePickerController` sheet for field workers who want to
+    /// shoot the delivery photo on the spot instead of digging
+    /// through the photo library. Hidden when the device has no
+    /// camera (most Macs / certain iPads).
+    @State private var showCamera = false
 
     init(entity: any ReceivableEntity,
          onConfirm: @escaping ([UUID: Decimal], String?) -> Void) {
@@ -2482,20 +2487,42 @@ struct ReceiveItemsSheet: View {
                     }
                 }
 
-                // Photo proof — required to flip to .delivered. PhotosPicker
-                // covers both the camera roll and (on iOS 17+) live capture
-                // via the system picker. No custom camera UI needed.
+                // Photo proof — required to flip to .delivered.
+                // FIX (BV-MR-2026-0001 follow-up): two side-by-side
+                // buttons. "Take Photo" launches the live camera via
+                // `CameraPicker`; "Choose from Library" launches the
+                // existing PhotosPicker for picking an existing image.
+                // Pre-fix only the library picker was available —
+                // PhotosPicker has no live-camera mode. Field crews
+                // receiving deliveries should be able to capture
+                // proof on the spot without leaving the app or
+                // switching to the Camera app and back.
                 Section {
-                    PhotosPicker(
-                        selection: $photoItem,
-                        matching: .images,
-                        photoLibrary: .shared()
-                    ) {
-                        Label(
-                            hasPhoto ? "Replace Photo" : "Attach Delivery Photo",
-                            systemImage: "camera.fill"
-                        )
-                        .foregroundColor(.blue)
+                    HStack(spacing: 10) {
+                        if CameraPicker.isAvailable {
+                            Button {
+                                showCamera = true
+                            } label: {
+                                Label("Take Photo", systemImage: "camera.fill")
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
+                                    .background(Color.blue)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(8)
+                            }
+                        }
+                        PhotosPicker(
+                            selection: $photoItem,
+                            matching: .images,
+                            photoLibrary: .shared()
+                        ) {
+                            Label("Choose from Library", systemImage: "photo.on.rectangle")
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                                .background(Color(.secondarySystemBackground))
+                                .foregroundColor(.primary)
+                                .cornerRadius(8)
+                        }
                     }
                     .onChange(of: photoItem) { item in
                         Task {
@@ -2551,6 +2578,17 @@ struct ReceiveItemsSheet: View {
                     Spacer()
                     Button("Done") {}
                 }
+            }
+            // FIX (BV-MR-2026-0001 follow-up): live camera capture.
+            // Full-screen cover (not a sheet) gives the camera its
+            // full viewport; matches how iOS apps typically launch
+            // the camera. Binding wraps `photoImage` so capturing a
+            // shot writes straight into the same state the
+            // PhotosPicker path uses — downstream save logic is
+            // unchanged.
+            .fullScreenCover(isPresented: $showCamera) {
+                CameraPicker(image: $photoImage)
+                    .ignoresSafeArea()
             }
         }
     }
