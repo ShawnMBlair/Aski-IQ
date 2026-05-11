@@ -1092,7 +1092,18 @@ struct MRDetailView: View {
             MRCreateEditView(request: local, preselectedProjectID: local.projectID)
         }
         .sheet(isPresented: $showCreatePO, onDismiss: refreshLocal) {
+            // Phase 7 follow-up bug fix (BV-MR-2026-0001): the PO sheet
+            // appeared not to scroll on iPhone — confirmed cause was a
+            // missing explicit detent + no interactive keyboard
+            // dismissal. Without explicit detents the sheet defaulted
+            // to .large but on devices with active keyboard avoidance
+            // the lower sections (Line Items, Notes, Tax) were clipped
+            // by the keyboard with no recovery gesture. The combo of
+            // .large detent + drag indicator + interactive keyboard
+            // dismiss inside the Form fixes it.
             POCreateEditView(po: newPOFromRequest())
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showReceiveSheet, onDismiss: refreshLocal) {
             ReceiveItemsSheet(entity: local) { quantities, photoPath in
@@ -3306,6 +3317,13 @@ struct POCreateEditView: View {
                     }
                 }
             }
+            // Phase 7 follow-up bug fix (BV-MR-2026-0001): let the user
+            // drag the form to dismiss the keyboard. Without this,
+            // tapping a text field traps the keyboard up and Line
+            // Items / Notes / Tax sections sit behind it with no
+            // recovery gesture — the bug the user reported as
+            // "wont let me scroll down".
+            .scrollDismissesKeyboard(.interactively)
             .disabled(isLocked)
             .navigationTitle(isNew ? "New Purchase Order" : "Edit PO")
             .navigationBarTitleDisplayMode(.inline)
