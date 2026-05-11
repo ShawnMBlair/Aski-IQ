@@ -1113,6 +1113,23 @@ struct MRDetailView: View {
                             }
                         }
                     }
+                    // FIX (BV-MR-2026-0001 follow-up): manual transition
+                    // from .approved → .ordered. Pre-fix the ONLY path
+                    // to .ordered was via "Email Approval to Supplier"
+                    // (which fires `markMaterialRequestOrdered` after
+                    // a successful send). For internal MRs, supplier-
+                    // less MRs, or orders placed by phone / in-person,
+                    // the user was stuck on .approved with no way to
+                    // progress to receive-on-site. This button gives
+                    // the manual escape hatch.
+                    if local.status == .approved
+                        && store.canPerform(action: .materialRequestSendToSupplier) {
+                        actionButton("Mark as Ordered", icon: "cart.fill", color: .cyan) {
+                            store.markMaterialRequestOrdered(local)
+                            ToastService.shared.success("Marked as ordered — Receive Items is now available.")
+                            refreshLocal()
+                        }
+                    }
                     if (local.status == .ordered || local.status == .partial) && store.canPerform(action: .materialRequestReceive) {
                         actionButton("Receive Items", icon: "shippingbox.fill", color: .green) {
                             showReceiveSheet = true
