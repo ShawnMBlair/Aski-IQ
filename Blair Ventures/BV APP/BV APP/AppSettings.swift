@@ -391,6 +391,14 @@ struct SettingsView: View {
     @ObservedObject private var qbo = QBOService.shared
     @State private var showQBOConnect = false
 
+    /// FIX (Mac Catalyst): the settings sheet had no Done/close
+    /// button, only a Save button. On iOS a sheet can be dismissed
+    /// by swiping down; on Catalyst there's no such gesture and the
+    /// title bar has no close affordance — the user was stuck inside
+    /// the sheet after saving. Adding the standard iOS "Done" button
+    /// to the leading toolbar slot fixes both platforms cleanly.
+    @Environment(\.dismiss) private var dismiss
+
     var body: some View {
         NavigationStack {
             Form {
@@ -992,6 +1000,14 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
+                // FIX (Mac Catalyst): leading Done button so the user
+                // can close the settings sheet after saving. Pre-fix
+                // there was no close affordance and the Mac had no
+                // swipe-down gesture to dismiss — users were stuck on
+                // settings after tapping Save.
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Done") { dismiss() }
+                }
                 // Explicit Save button — only enabled when the user has
                 // unsaved changes. This is the canonical way to push
                 // settings to Supabase; never relies on didSet writes.
@@ -1180,12 +1196,21 @@ struct SettingsView: View {
     /// Push the in-memory settings cache to Supabase. Called by the
     /// toolbar Save button. Surfaces failures via an alert so the user
     /// knows whether the values they typed actually persisted.
+    ///
+    /// FIX (Mac Catalyst follow-up): on successful save, also dismiss
+    /// the sheet + show a confirmation toast. Pre-fix the button
+    /// just disabled itself with no visible feedback and the user
+    /// was stuck on settings wondering whether anything happened.
+    /// The user reported this directly: "When I saved in settings on
+    /// macbook it wont close and move past."
     private func saveSettings() async {
         guard !isSavingSettings else { return }
         isSavingSettings = true
         defer { isSavingSettings = false }
         do {
             try await settings.save()
+            ToastService.shared.success("Settings saved.")
+            dismiss()
         } catch {
             settingsSaveError = error.localizedDescription
         }
