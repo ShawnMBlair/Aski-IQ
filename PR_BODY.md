@@ -1,6 +1,6 @@
 # Aski IQ v1.0 — Stabilization + Phase 8 v2+ + Mac Catalyst
 
-Ships the full 8-phase stabilization plan, all autonomously-completable Phase 8 v2+ tracks, Mac Catalyst readiness, a deep procurement-workflow defect sweep, and the post-audit polish round. **41 commits.**
+Ships the full 8-phase stabilization plan, all autonomously-completable Phase 8 v2+ tracks, Mac Catalyst readiness, a deep procurement-workflow defect sweep, and the post-audit polish round. **42 commits.**
 
 ## Summary
 
@@ -66,6 +66,7 @@ Final post-stabilization sweep — silent-failure surface area + the only "offli
 | `678b0fa` | MEDIUM batch: `.scrollDismissesKeyboard(.interactively)` on 12 forms + live camera (`Take Photo` next to `Photo Library`) on 5 photo flows |
 | `f0215d6` | Surface per-row error reason for CRM pushes — Failed Syncs screen was designed to show diagnoses but CRM sync was dropping the error |
 | `91864c0` | Failed Syncs redesign per `/design-critique`: inline Retry chip, "Waiting on _Parent_" dependency badges, plain-language banner, polished auto-dismissing empty state, cross-platform toolbar placements |
+| `b9193b0` | Failed Syncs completeness: extend `recordSyncError` + `clearSyncError` to 22 remaining entity types (projects, employees, crews, schedule, timesheets, form templates/submissions, audit, exceptions, budgets, subs, products, pricings, clients, estimates, clauses, milestones, compliance, waivers, cost codes). Every push catch block in the app now surfaces its server-side rejection reason on the Failed Syncs screen. |
 
 ### Migrations applied to prod (2026-05-10)
 
@@ -98,7 +99,6 @@ Final post-stabilization sweep — silent-failure surface area + the only "offli
 | AI v3 (RAG, function-calling, threads multi-window) | Next phase scope |
 | Inventory v2.1 (multi-UOM, barcode scan, suggested PO) | Next phase scope |
 | Gantt v2 (drag-to-edit, dependency arrows, milestones) | Next phase scope |
-| `recordSyncError` for the ~22 non-CRM entity types still silent | Mechanical follow-up after v1.0 — same pattern as CRM fix in `f0215d6`, ~1 hour |
 | Remove `canPerformLegacy` fallback | Once WS1 seed is proven in admin practice |
 | Pull-side test coverage beyond DJR + Inventory | Mechanical follow-up; `FakeSyncClient` pattern documented |
 | Web app | Separate workstream — 3-4 months after v1.0 ships |
