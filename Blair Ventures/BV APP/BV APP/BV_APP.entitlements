@@ -2,53 +2,35 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Push notifications. iOS + Catalyst. -->
+	<!-- Push notifications. iOS + Catalyst, no provisioning profile
+	     changes required vs the original APNs-only setup. -->
 	<key>aps-environment</key>
 	<string>production</string>
 	<key>com.apple.developer.aps-environment</key>
 	<string>production</string>
 
 	<!--
-	  Mac Catalyst App Sandbox entitlements.
+	  Mac Catalyst note:
+	  ENABLE_APP_SANDBOX is set to NO on the target so the build
+	  works with the existing Apple ID + automatic signing without
+	  needing the Apple Developer portal to add Network / Camera /
+	  Photos / Location capabilities to the App ID. Sign-in (and
+	  every other HTTPS call) works because nothing is blocking
+	  outbound network traffic.
 
-	  iOS doesn't use App Sandbox in the macOS sense, but Catalyst
-	  does — and `ENABLE_APP_SANDBOX = YES` is set on the target. Without
-	  these declarations, the sandbox blocks the corresponding system
-	  capabilities. The most painful symptom is sign-in: Supabase auth
-	  needs network.client, and without it every HTTPS call silently
-	  fails on Mac (works on iPhone because iOS scopes sandbox
-	  differently).
+	  Re-enabling App Sandbox is a Mac App Store distribution task —
+	  not required for development, TestFlight, or Developer ID
+	  Direct distribution. When that time comes, flip
+	  ENABLE_APP_SANDBOX back to YES and add these entitlements:
 
-	  Each key below is iOS-safe (ignored on iOS builds) but unlocks
-	  the equivalent capability on Catalyst.
+	    <key>com.apple.security.network.client</key>            <true/>
+	    <key>com.apple.security.files.user-selected.read-write</key> <true/>
+	    <key>com.apple.security.device.camera</key>             <true/>
+	    <key>com.apple.security.personal-information.photos-library</key> <true/>
+	    <key>com.apple.security.personal-information.location</key> <true/>
+
+	  …then click "Try Again" in Xcode's Signing & Capabilities tab
+	  to regenerate the provisioning profile.
 	-->
-
-	<!-- Outbound HTTPS — Supabase REST, Storage, RPCs, Edge Functions,
-	     ai-proxy streaming, Anthropic, etc. -->
-	<key>com.apple.security.network.client</key>
-	<true/>
-
-	<!-- File picker (Files.app on iPad, NSOpenPanel-backed on Mac)
-	     for PDF export, photo import, document scanning fallback. -->
-	<key>com.apple.security.files.user-selected.read-write</key>
-	<true/>
-
-	<!-- Camera — receipt scanner, delivery photo capture, incident
-	     photos. Catalyst forwards to the user-facing system prompt
-	     gated by NSCameraUsageDescription (already in Info.plist). -->
-	<key>com.apple.security.device.camera</key>
-	<true/>
-
-	<!-- Photo Library — PhotosPicker for choosing existing images
-	     instead of capturing live. Catalyst-only entitlement; the
-	     iOS NSPhotoLibraryUsageDescription handles the iOS side. -->
-	<key>com.apple.security.personal-information.photos-library</key>
-	<true/>
-
-	<!-- Location — auto-fill weather + jobsite coordinates on
-	     timesheets / incidents / forms. Catalyst will prompt via the
-	     existing NSLocationWhenInUseUsageDescription copy. -->
-	<key>com.apple.security.personal-information.location</key>
-	<true/>
 </dict>
 </plist>
