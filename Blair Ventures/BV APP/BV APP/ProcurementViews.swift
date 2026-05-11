@@ -1015,20 +1015,60 @@ struct MRDetailView: View {
                             .background(Color.orange.opacity(0.08)).cornerRadius(8)
                     }
                     if local.status == .approved && store.canPerform(action: .materialRequestSendToSupplier) {
-                        // No supplier yet — give the user a clear next step
-                        // ("set a supplier so a PO can be drafted") rather
-                        // than a wall of disabled buttons.
-                        if local.supplierID == nil {
-                            HStack(alignment: .top, spacing: 8) {
-                                Image(systemName: "info.circle")
-                                    .foregroundColor(.orange)
-                                Text("Pick a supplier on this request to auto-draft a Purchase Order, or create one manually below.")
-                                    .font(.caption).foregroundColor(.secondary)
-                                Spacer()
+                        // Phase 7 follow-up fix (BV-MR-2026-0001): pre-fix
+                        // the supplier-warning text and the "Create
+                        // Purchase Order" button rendered as separate
+                        // items in the action stack. Users seeing
+                        // "or create one manually below" had to scan
+                        // past an Email button and (sometimes) Receive
+                        // / Edit / Delete buttons to find the Create PO
+                        // affordance — a real "I can't add it manually"
+                        // dead-end reported by a tester. Folding the
+                        // warning + the inline create button into one
+                        // visual unit removes the ambiguity.
+                        if local.supplierID == nil && local.purchaseOrderID == nil {
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack(alignment: .top, spacing: 8) {
+                                    Image(systemName: "info.circle")
+                                        .foregroundColor(.orange)
+                                    Text("No supplier set on this request.")
+                                        .font(.caption).foregroundColor(.primary)
+                                    Spacer()
+                                }
+                                Text("Pick a supplier to auto-draft a Purchase Order, or create the PO manually now.")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                // Two side-by-side actions so the user
+                                // sees both paths immediately without
+                                // scanning further down the action stack.
+                                HStack(spacing: 8) {
+                                    Button {
+                                        showEdit = true
+                                    } label: {
+                                        Label("Add Supplier", systemImage: "person.crop.rectangle.badge.plus")
+                                            .font(.subheadline)
+                                            .frame(maxWidth: .infinity)
+                                            .padding(.vertical, 10)
+                                            .background(Color.orange)
+                                            .foregroundColor(.white)
+                                            .cornerRadius(8)
+                                    }
+                                    Button {
+                                        showCreatePO = true
+                                    } label: {
+                                        Label("Create PO Manually", systemImage: "doc.badge.plus")
+                                            .font(.subheadline)
+                                            .frame(maxWidth: .infinity)
+                                            .padding(.vertical, 10)
+                                            .background(Color.purple)
+                                            .foregroundColor(.white)
+                                            .cornerRadius(8)
+                                    }
+                                }
                             }
-                            .padding(10)
+                            .padding(12)
                             .background(Color.orange.opacity(0.08))
-                            .cornerRadius(8)
+                            .cornerRadius(10)
                         }
                         // Email-to-supplier — only shown when a supplier with an
                         // email is set on the MR. The generator regenerates the
@@ -1049,12 +1089,12 @@ struct MRDetailView: View {
                                 }
                             }
                         }
-                        // The Create PO button is now only useful when no
-                        // PO got auto-drafted (supplier-less requests, or
-                        // legacy MRs approved before this automation
-                        // shipped). When auto-draft fired, the existing
-                        // "Linked PO" GroupBox above takes over.
-                        if local.purchaseOrderID == nil {
+                        // Fall-back Create PO button for the supplier-set
+                        // path. When supplier IS set but the auto-draft
+                        // didn't fire (legacy / re-approval / supplier
+                        // deleted), the user still needs a way to spawn
+                        // a PO manually.
+                        if local.supplierID != nil && local.purchaseOrderID == nil {
                             actionButton("Create Purchase Order", icon: "doc.badge.plus", color: .purple) {
                                 showCreatePO = true
                             }
