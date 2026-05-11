@@ -1,14 +1,14 @@
-# Aski IQ v1.0 — Stabilization + Phase 8 v2+
+# Aski IQ v1.0 — Stabilization + Phase 8 v2+ + Mac Catalyst
 
-Ships the full 8-phase stabilization plan plus all autonomously-completable Phase 8 v2+ tracks. 25 commits.
+Ships the full 8-phase stabilization plan, all autonomously-completable Phase 8 v2+ tracks, Mac Catalyst readiness, a deep procurement-workflow defect sweep, and the post-audit polish round. **41 commits.**
 
 ## Summary
 
-This PR closes the multi-month stabilization plan agreed 2026-05-09 and lands every Phase 8 v2+ feature that didn't require external prerequisites (Watch target, vendor OAuth). Build green on iOS device target, 58 unit tests green on iPhone 17 / iOS 26.4.1 sim.
+Closes the multi-month stabilization plan agreed 2026-05-09 plus every Phase 8 v2+ feature that didn't require external prerequisites (Watch target, vendor OAuth). Adds Mac Catalyst as a shipped platform — Aski IQ now runs on iPhone, iPad, and macOS from the same codebase. iOS device + Mac Catalyst builds green; 58+ unit tests green on iPhone 17 / iOS 26.4.1 sim.
 
 ## What's in here
 
-### Stabilization (Phases 2 → 7)
+### 1. Stabilization (Phases 2 → 7)
 
 | Phase | Commits | Outcome |
 |---|---|---|
@@ -18,7 +18,7 @@ This PR closes the multi-month stabilization plan agreed 2026-05-09 and lands ev
 | 7 (Decision 1) | `73d5554`, `13c862a` | Auto-route the 8 top-level commercial creates through parent pickers via new `ParentPickerSheet` helper. Fixes 2 real `UUID()` orphan bugs (CO + RFI). Also fixes adjacent Sub-Contract project-scope bug. |
 | 4 (cleanup) | `79ae0d0`, `5c4d24a` | WS1 INSERT fix + SEC3 anon-revoke migration. |
 
-### Phase 8 — New features
+### 2. Phase 8 — New features
 
 | Track | Commits | Outcome |
 |---|---|---|
@@ -32,6 +32,41 @@ This PR closes the multi-month stabilization plan agreed 2026-05-09 and lands ev
 | Watch + Integrations | `a53ce1f` | Architecture docs (blocked on Xcode target / vendor credentials respectively). |
 | Supabase | `af8a23b` | INV2 + MULTI1 + anon-revoke applied to prod via `phase8-v2-supabase` branch. iOS `switchToCompany` now calls `set_active_company` RPC before local cache wipe. |
 
+### 3. Mac Catalyst readiness — new platform
+
+| Commit | Outcome |
+|---|---|
+| `d5f6022` | Enable Mac Catalyst target. Aski IQ now ships on iPhone, iPad, **and macOS** from the same codebase. |
+| `6d716dc` | Add network + photos + camera + location entitlements so sign-in + capture flows work in the sandboxed Catalyst container. |
+| `dcc341d` | Disable App Sandbox so users can sign in with their existing Apple ID without re-pairing on Mac. |
+| `414e4b1` | Fix Settings sheet not dismissing after save on Mac Catalyst. |
+
+### 4. Procurement workflow defect sweep
+
+Triggered by real-world repro of BV-MR-2026-0001 (couldn't convert MR → PO). Cascaded into a full re-audit of the procurement flow.
+
+| Commit | Defect → fix |
+|---|---|
+| `5d0de49` | PO create-edit sheet wouldn't scroll when keyboard up |
+| `b9d84c4` | MR-approved-no-supplier flow: collapsed scattered warning + action into one card |
+| `39243fd` | **Root-cause fix for BV-MR-2026-0001**: PO creation + PDF share for supplier-less MRs |
+| `a6ff1a3` | Supplier picker bypass, PO edit-lock, approval-PDF generation |
+| `3d1815f` | Manual "Mark as Ordered" button for approved MRs (was implicit-only) |
+| `1d9a6e3` | Direct camera capture for delivery photos (was photo-library only) |
+| `51766d0` | Close + Cancel terminal actions on Material Requests and Purchase Orders |
+| `7136299` | Monotonic request/PO number generation across soft-deletes (was reusing freed numbers, e.g. every new request started at BV-MR-2026-0001) |
+
+### 5. Debug audit + Failed Syncs polish
+
+Final post-stabilization sweep — silent-failure surface area + the only "offline conflict resolution" UI in the app.
+
+| Commit | Outcome |
+|---|---|
+| `7ea9d67` | Fix 3 silent-push-fail bugs (Invoice / CO / Contract missing `opportunityID` on push) + gate VisionKit doc scanner on iPhone-only (Catalyst regression) |
+| `678b0fa` | MEDIUM batch: `.scrollDismissesKeyboard(.interactively)` on 12 forms + live camera (`Take Photo` next to `Photo Library`) on 5 photo flows |
+| `f0215d6` | Surface per-row error reason for CRM pushes — Failed Syncs screen was designed to show diagnoses but CRM sync was dropping the error |
+| `91864c0` | Failed Syncs redesign per `/design-critique`: inline Retry chip, "Waiting on _Parent_" dependency badges, plain-language banner, polished auto-dismissing empty state, cross-platform toolbar placements |
+
 ### Migrations applied to prod (2026-05-10)
 
 - `INV2_reorder_thresholds` — adds nullable reorder columns + non-negative CHECKs + partial index.
@@ -42,13 +77,17 @@ This PR closes the multi-month stabilization plan agreed 2026-05-09 and lands ev
 
 - [x] iOS device build green (`xcodebuild build` on `generic/platform=iOS`)
 - [x] iOS simulator build green (iPhone 17 / iOS 26.4.1)
+- [x] **Mac Catalyst build green** (`platform=macOS,variant=Mac Catalyst`)
 - [x] 58 unit tests green on iPhone 17 sim — no regressions across sync engine, MR push, DJR push, MR + Inventory push/pull, number generation, error mapper, permissions
 - [x] Supabase advisors: 5 new warnings introduced by MULTI1 → 2 remaining (both intentional: `authenticated` must call `current_user_company_ids` for RLS evaluation + `set_active_company` for swap)
-- [ ] Manual smoke: iPhone — every tab, parent-picker auto-routes, AI threads, multi-company swap, Inventory reorder threshold
-- [ ] Manual smoke: iPad — same, verify sidebar layout
+- [ ] **Manual smoke — iPhone**: every tab, parent-picker auto-routes, AI threads, multi-company swap, Inventory reorder threshold, MR→PO→Receive flow, camera capture in DJR / Incident / Certificate / CRM attachment
+- [ ] **Manual smoke — iPad**: same surface as iPhone + verify sidebar layout, photo+camera split, Settings dismiss
+- [ ] **Manual smoke — Mac Catalyst**: sign-in with existing Apple ID, Settings dismiss after save, Failed Syncs sheet, doc scanner correctly hidden, file picker
 - [ ] Manual smoke: AI chat hydrates from disk on cold launch
 - [ ] Manual smoke: Material Request creation surfaces inventory availability toast
-- [ ] Manual smoke: Gantt scales (Week/Month/Quarter) render with current projects
+- [ ] Manual smoke: Gantt scales (Week / Month / Quarter) render with current projects
+- [ ] Manual smoke: Failed Syncs row shows actual error reason + "Waiting on Parent" badge when applicable; auto-dismisses after clearing the queue
+- [ ] **Push notification provisioning** — verify entitlements file references resolve in Xcode auto-signing (CLI was using `CODE_SIGNING_ALLOWED=NO` as workaround during development)
 
 ## Deferred / not in this PR
 
@@ -59,8 +98,10 @@ This PR closes the multi-month stabilization plan agreed 2026-05-09 and lands ev
 | AI v3 (RAG, function-calling, threads multi-window) | Next phase scope |
 | Inventory v2.1 (multi-UOM, barcode scan, suggested PO) | Next phase scope |
 | Gantt v2 (drag-to-edit, dependency arrows, milestones) | Next phase scope |
-| Mac Catalyst | Will land in follow-up PR after this merges |
-| Web app | Separate workstream after Mac Catalyst |
+| `recordSyncError` for the ~22 non-CRM entity types still silent | Mechanical follow-up after v1.0 — same pattern as CRM fix in `f0215d6`, ~1 hour |
+| Remove `canPerformLegacy` fallback | Once WS1 seed is proven in admin practice |
+| Pull-side test coverage beyond DJR + Inventory | Mechanical follow-up; `FakeSyncClient` pattern documented |
+| Web app | Separate workstream — 3-4 months after v1.0 ships |
 
 ## Rollback
 
