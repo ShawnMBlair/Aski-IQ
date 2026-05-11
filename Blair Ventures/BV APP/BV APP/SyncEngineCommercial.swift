@@ -407,10 +407,12 @@ extension SyncEngine {
                 if let i = store.projectBudgets.firstIndex(where: { $0.id == bud.id }) {
                     store.projectBudgets[i].syncStatus = .synced
                 }
+                await MainActor.run { store.clearSyncError(id: bud.id) }
             } catch {
                 if let i = store.projectBudgets.firstIndex(where: { $0.id == bud.id }) {
                     store.projectBudgets[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: bud.id, error: error) }
             }
         }
         store.saveBudgets()
@@ -519,10 +521,12 @@ extension SyncEngine {
                 if let i = store.subcontractors.firstIndex(where: { $0.id == sub.id }) {
                     store.subcontractors[i].syncStatus = .synced
                 }
+                await MainActor.run { store.clearSyncError(id: sub.id) }
             } catch {
                 if let i = store.subcontractors.firstIndex(where: { $0.id == sub.id }) {
                     store.subcontractors[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: sub.id, error: error) }
             }
         }
         store.saveSubcontractors()
@@ -1529,10 +1533,12 @@ extension SyncEngine {
                 if let i = store.productServices.firstIndex(where: { $0.id == ps.id }) {
                     store.productServices[i].syncStatus = .synced
                 }
+                await MainActor.run { store.clearSyncError(id: ps.id) }
             } catch {
                 if let i = store.productServices.firstIndex(where: { $0.id == ps.id }) {
                     store.productServices[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: ps.id, error: error) }
             }
         }
     }
@@ -1603,10 +1609,12 @@ extension SyncEngine {
                 if let i = store.clientPricings.firstIndex(where: { $0.id == cp.id }) {
                     store.clientPricings[i].syncStatus = .synced
                 }
+                await MainActor.run { store.clearSyncError(id: cp.id) }
             } catch {
                 if let i = store.clientPricings.firstIndex(where: { $0.id == cp.id }) {
                     store.clientPricings[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: cp.id, error: error) }
             }
         }
     }
@@ -1696,6 +1704,7 @@ extension SyncEngine {
                 var updated = client; updated.syncStatus = .synced
                 store.upsertClientSynced(updated)
                 store.clients.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: client.id) }
             } catch {
                 // No more silent swallow — surface the actual error so
                 // the user sees what RLS / column mismatch / network
@@ -1710,6 +1719,7 @@ extension SyncEngine {
                 ])
                 var updated = client; updated.syncStatus = .failed
                 store.upsertClientSynced(updated)
+                await MainActor.run { store.recordSyncError(id: client.id, error: error) }
             }
         }
     }
@@ -1914,6 +1924,7 @@ extension SyncEngine {
                 if let i = store.estimates.firstIndex(where: { $0.id == est.id }) {
                     store.estimates[i].syncStatus = .synced
                 }
+                await MainActor.run { store.clearSyncError(id: est.id) }
             } catch {
                 // 2026-04 audit: this catch was silent, which is why
                 // "estimates not syncing" was hard to diagnose. Log
@@ -1929,6 +1940,7 @@ extension SyncEngine {
                 if let i = store.estimates.firstIndex(where: { $0.id == est.id }) {
                     store.estimates[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: est.id, error: error) }
             }
         }
         store.objectWillChange.send()

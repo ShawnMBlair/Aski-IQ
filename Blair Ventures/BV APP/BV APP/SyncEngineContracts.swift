@@ -363,10 +363,12 @@ extension SyncEngine {
                 if let i = store.contractClauses.firstIndex(where: { $0.id == clause.id }) {
                     store.contractClauses[i].syncStatus = .synced
                 }
+                await MainActor.run { store.clearSyncError(id: clause.id) }
             } catch {
                 if let i = store.contractClauses.firstIndex(where: { $0.id == clause.id }) {
                     store.contractClauses[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: clause.id, error: error) }
             }
         }
     }
@@ -585,10 +587,12 @@ extension SyncEngine {
                 if let i = store.complianceDocuments.firstIndex(where: { $0.id == d.id }) {
                     store.complianceDocuments[i].syncStatus = .synced
                 }
+                await MainActor.run { store.clearSyncError(id: d.id) }
             } catch {
                 if let i = store.complianceDocuments.firstIndex(where: { $0.id == d.id }) {
                     store.complianceDocuments[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: d.id, error: error) }
             }
         }
     }
@@ -762,10 +766,12 @@ extension SyncEngine {
                 if let i = store.lienWaivers.firstIndex(where: { $0.id == w.id }) {
                     store.lienWaivers[i].syncStatus = .synced
                 }
+                await MainActor.run { store.clearSyncError(id: w.id) }
             } catch {
                 if let i = store.lienWaivers.firstIndex(where: { $0.id == w.id }) {
                     store.lienWaivers[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: w.id, error: error) }
             }
         }
     }
@@ -814,10 +820,12 @@ extension SyncEngine {
                 if let i = store.contractMilestones.firstIndex(where: { $0.id == m.id }) {
                     store.contractMilestones[i].syncStatus = .synced
                 }
+                await MainActor.run { store.clearSyncError(id: m.id) }
             } catch {
                 if let i = store.contractMilestones.firstIndex(where: { $0.id == m.id }) {
                     store.contractMilestones[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: m.id, error: error) }
             }
         }
     }
