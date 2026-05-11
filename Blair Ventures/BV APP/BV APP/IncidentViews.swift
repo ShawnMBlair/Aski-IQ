@@ -591,6 +591,11 @@ struct IncidentCreateEditView: View {
     // Photos
     @State private var photoItems: [PhotosPickerItem] = []
     @State private var photoData:  [Data]             = []
+    /// FIX (debug audit): live camera for incident scene photos. Field
+    /// crews logging incidents on a jobsite shouldn't have to switch
+    /// to Camera app and back — same pattern as ReceiveItemsSheet.
+    @State private var showCamera = false
+    @State private var capturedPhoto: UIImage? = nil
 
     // Documents
     @State private var documentAttachments: [IncidentDocument] = []
@@ -697,10 +702,30 @@ struct IncidentCreateEditView: View {
 
                 // MARK: Photos
                 Section("Site Photos") {
-                    PhotosPicker(selection: $photoItems, maxSelectionCount: 10,
-                                 matching: .images) {
-                        Label("Add Photos (\(photoData.count) selected)", systemImage: "camera")
-                            .foregroundColor(.blue)
+                    // FIX (debug audit): camera + library, side-by-side.
+                    // Camera captures one photo at a time and appends
+                    // to the photoData array; library picks N at once
+                    // (replaces the array per the existing semantics).
+                    HStack(spacing: 10) {
+                        if CameraPicker.isAvailable {
+                            Button {
+                                showCamera = true
+                            } label: {
+                                Label("Take Photo", systemImage: "camera.fill")
+                                    .frame(maxWidth: .infinity).padding(.vertical, 10)
+                                    .background(Color.blue)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(8)
+                            }
+                        }
+                        PhotosPicker(selection: $photoItems, maxSelectionCount: 10,
+                                     matching: .images) {
+                            Label("Add (\(photoData.count))", systemImage: "photo.on.rectangle")
+                                .frame(maxWidth: .infinity).padding(.vertical, 10)
+                                .background(Color(.secondarySystemBackground))
+                                .foregroundColor(.primary)
+                                .cornerRadius(8)
+                        }
                     }
                     .onChange(of: photoItems) { items in
                         Task {
@@ -844,6 +869,19 @@ struct IncidentCreateEditView: View {
                 }
             }
             .onAppear { populate() }
+            // FIX (debug audit): live camera sheet. Compresses + appends
+            // the captured shot to photoData so it's persisted alongside
+            // library picks on save.
+            .fullScreenCover(isPresented: $showCamera) {
+                CameraPicker(image: $capturedPhoto)
+                    .ignoresSafeArea()
+            }
+            .onChange(of: capturedPhoto) { img in
+                guard let img = img,
+                      let raw = img.jpegData(compressionQuality: 0.9) else { return }
+                photoData.append(compressPhoto(raw))
+                capturedPhoto = nil
+            }
         }
     }
 

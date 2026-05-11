@@ -111,6 +111,7 @@ struct QuoteSendReviewSheet: View {
                     }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Review & Send")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

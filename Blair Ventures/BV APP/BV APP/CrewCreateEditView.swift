@@ -114,6 +114,7 @@ struct CrewCreateEditView: View {
                     }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle(isEditing ? "Edit Crew" : "New Crew")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

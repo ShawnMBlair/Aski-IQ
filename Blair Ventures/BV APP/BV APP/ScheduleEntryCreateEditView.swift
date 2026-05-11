@@ -253,6 +253,7 @@ struct ScheduleEntryCreateEditView: View {
                     }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle(isEditing ? "Edit Shift" : "New Shift")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

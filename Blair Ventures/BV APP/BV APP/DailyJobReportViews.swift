@@ -797,6 +797,9 @@ struct DJRCreateEditView: View {
     // Photos
     @State private var selectedPhotoItems: [PhotosPickerItem] = []
     @State private var photoDataArray: [Data] = []
+    /// FIX (debug audit): live camera for DJR progress photos.
+    @State private var showCamera = false
+    @State private var capturedPhoto: UIImage? = nil
 
     // Add-item sheets
     @State private var showAddCrew = false
@@ -1083,17 +1086,35 @@ struct DJRCreateEditView: View {
                         }
                     }
 
-                    PhotosPicker(
-                        selection: $selectedPhotoItems,
-                        maxSelectionCount: 20,
-                        matching: .images
-                    ) {
-                        Label(
-                            photoDataArray.isEmpty
-                                ? "Add Site Photos"
-                                : "Add More Photos (\(photoDataArray.count) selected)",
-                            systemImage: "camera.fill"
-                        )
+                    // FIX (debug audit): live camera + library side-by-side.
+                    // Field crews shooting progress photos shouldn't have
+                    // to switch out to Camera and back.
+                    HStack(spacing: 10) {
+                        if CameraPicker.isAvailable {
+                            Button {
+                                showCamera = true
+                            } label: {
+                                Label("Take Photo", systemImage: "camera.fill")
+                                    .frame(maxWidth: .infinity).padding(.vertical, 10)
+                                    .background(Color.blue)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(8)
+                            }
+                        }
+                        PhotosPicker(
+                            selection: $selectedPhotoItems,
+                            maxSelectionCount: 20,
+                            matching: .images
+                        ) {
+                            Label(
+                                photoDataArray.isEmpty ? "From Library" : "From Library (\(photoDataArray.count))",
+                                systemImage: "photo.on.rectangle"
+                            )
+                            .frame(maxWidth: .infinity).padding(.vertical, 10)
+                            .background(Color(.secondarySystemBackground))
+                            .foregroundColor(.primary)
+                            .cornerRadius(8)
+                        }
                     }
                     .onChange(of: selectedPhotoItems) { items in
                         Task {
@@ -1109,6 +1130,7 @@ struct DJRCreateEditView: View {
                     Text("Site Photos (\(photoDataArray.count))")
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle(existingReport == nil ? "New Daily Report" : "Edit Report")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1118,6 +1140,19 @@ struct DJRCreateEditView: View {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("Save") { save() }.bold()
                 }
+            }
+            // FIX (debug audit): live camera sheet for DJR progress
+            // photos. Compresses + appends to photoDataArray, mirroring
+            // the library picker path.
+            .fullScreenCover(isPresented: $showCamera) {
+                CameraPicker(image: $capturedPhoto)
+                    .ignoresSafeArea()
+            }
+            .onChange(of: capturedPhoto) { img in
+                guard let img = img,
+                      let raw = img.jpegData(compressionQuality: 0.9) else { return }
+                photoDataArray.append(compressPhoto(raw))
+                capturedPhoto = nil
             }
         }
     }

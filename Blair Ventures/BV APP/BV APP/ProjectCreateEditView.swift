@@ -225,6 +225,7 @@ struct ProjectCreateEditView: View {
             // non-interactive — users can READ a closed project, just
             // not change it.
             .disabled(isLocked)
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle(isEditing ? "Edit Project" : "New Project")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
