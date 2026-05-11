@@ -652,6 +652,13 @@ struct MRDetailView: View {
     @State private var local: MaterialRequest
     @State private var showEdit = false
     @State private var showCreatePO = false
+    /// FIX (BV-MR-2026-0001): "Add Supplier" must open the actual
+    /// SupplierCreateEditView, not the MR editor. Pre-fix the button
+    /// routed to `showEdit = true` which opened the MR editor — the
+    /// user reported "there is no way to add a supplier" because the
+    /// MR editor's Supplier picker shows existing suppliers but
+    /// doesn't expose a "create new" path.
+    @State private var showCreateSupplier = false
     @State private var showDeleteAlert = false
     @State private var showReceiveSheet = false
     @State private var showDuplicateAlert = false
@@ -674,6 +681,12 @@ struct MRDetailView: View {
             }
         }
     }
+
+    /// FIX (BV-MR-2026-0001): state for the View PDF preview sheet.
+    /// Holds the resolved local file URL (cache hit OR fresh download
+    /// from Supabase Storage). When non-nil the sheet is shown.
+    @State private var viewPDFURL: URL? = nil
+    @State private var isResolvingPDF = false
 
     init(request: MaterialRequest) {
         self.request = request
@@ -1043,7 +1056,7 @@ struct MRDetailView: View {
                                 // scanning further down the action stack.
                                 HStack(spacing: 8) {
                                     Button {
-                                        showEdit = true
+                                        showCreateSupplier = true
                                     } label: {
                                         Label("Add Supplier", systemImage: "person.crop.rectangle.badge.plus")
                                             .font(.subheadline)
@@ -1105,14 +1118,38 @@ struct MRDetailView: View {
                             showReceiveSheet = true
                         }
                     }
-                    // FIX (BV-MR-2026-0001 follow-up): "Share / Save PDF"
-                    // works regardless of supplier. Generates the
-                    // approval PDF locally and hands its URL to the
-                    // system share sheet via ShareLink so the user can
-                    // email, save to Files, AirDrop, or print without
-                    // having to set a supplier first. Hidden until the
-                    // request has line items (nothing to render).
+                    // FIX (BV-MR-2026-0001 follow-up): View PDF button —
+                    // shown when an approval PDF exists. Resolves the
+                    // pdf_storage_path via the generator (cache → fresh
+                    // Supabase Storage download) and opens a sheet
+                    // wrapping QuickLook for inline preview.
                     #if canImport(UIKit)
+                    if let _ = local.pdfStoragePath, local.pdfGeneratedAt != nil {
+                        Button {
+                            Task {
+                                isResolvingPDF = true
+                                defer { isResolvingPDF = false }
+                                viewPDFURL = await MaterialRequestPDFGenerator.shared
+                                    .resolveViewableURL(for: local)
+                                if viewPDFURL == nil {
+                                    ToastService.shared.error("Couldn't load the approval PDF.")
+                                }
+                            }
+                        } label: {
+                            HStack {
+                                Image(systemName: isResolvingPDF ? "ellipsis.circle" : "doc.text.magnifyingglass")
+                                Text(isResolvingPDF ? "Loading PDF…" : "View Approval PDF")
+                            }
+                            .frame(maxWidth: .infinity).padding(.vertical, 12)
+                            .background(Color.indigo)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                        }
+                        .disabled(isResolvingPDF)
+                    }
+                    // Share / Save PDF — works regardless of supplier or
+                    // pdf_storage_path. Generates fresh if needed and
+                    // hands the URL to the system share sheet.
                     if !local.lineItems.isEmpty,
                        let pdfURL = MaterialRequestPDFGenerator.shared.prepareSharePDF(for: local, store: store) {
                         ShareLink(item: pdfURL,
@@ -1151,6 +1188,29 @@ struct MRDetailView: View {
         .sheet(isPresented: $showEdit, onDismiss: refreshLocal) {
             MRCreateEditView(request: local, preselectedProjectID: local.projectID)
         }
+        // FIX (BV-MR-2026-0001): "Add Supplier" opens the real
+        // SupplierCreateEditView sheet. On dismiss we look for the
+        // most-recently-created supplier and auto-attach it to this
+        // MR so the user lands back on a state where the auto-draft
+        // path is unblocked. Avoids the "I added a supplier but
+        // nothing changed" dead-end.
+        .sheet(isPresented: $showCreateSupplier, onDismiss: {
+            attachNewlyCreatedSupplier()
+        }) {
+            SupplierCreateEditView(supplier: nil)
+        }
+        // FIX (BV-MR-2026-0001): View PDF sheet. Bound to `viewPDFURL`
+        // so the sheet shows whenever the user taps View PDF AND the
+        // resolver successfully returned a local file URL. QuickLook
+        // handles inline preview, share, print, save-to-Files.
+        #if canImport(UIKit)
+        .sheet(item: Binding(
+            get: { viewPDFURL.map(IdentifiableURL.init) },
+            set: { viewPDFURL = $0?.url }
+        )) { wrapped in
+            QuickLookPreview(url: wrapped.url)
+        }
+        #endif
         .sheet(isPresented: $showCreatePO, onDismiss: refreshLocal) {
             // Phase 7 follow-up bug fix (BV-MR-2026-0001): the PO sheet
             // appeared not to scroll on iPhone — confirmed cause was a
@@ -1298,6 +1358,34 @@ struct MRDetailView: View {
 
     private func refreshLocal() {
         if let fresh = store.materialRequests.first(where: { $0.id == request.id }) { local = fresh }
+    }
+
+    /// FIX (BV-MR-2026-0001): called on dismiss of the "Add Supplier"
+    /// sheet. Finds the most-recently-created supplier (heuristic: the
+    /// largest createdAt timestamp) and attaches it to the current MR
+    /// if the user didn't cancel. The attachment fires the regular
+    /// updateMaterialRequest path so the change pushes through sync,
+    /// which on next approval will let `createPODraftFromApprovedRequest`
+    /// fire automatically (since now supplierID is set).
+    ///
+    /// Guard: only attaches when (a) local.supplierID is still nil
+    /// (user didn't somehow set one in between) and (b) the candidate
+    /// supplier was created within the last 60 seconds. Avoids
+    /// accidentally attaching an old supplier on a no-op sheet
+    /// dismissal.
+    private func attachNewlyCreatedSupplier() {
+        guard local.supplierID == nil else { return }
+        let recent = store.suppliers
+            .filter { Date().timeIntervalSince($0.createdAt) < 60 }
+            .sorted { $0.createdAt > $1.createdAt }
+        guard let newest = recent.first else { return }
+        var updated = local
+        updated.supplierID = newest.id
+        updated.updatedAt  = Date()
+        updated.syncStatus = .pending
+        store.updateMaterialRequest(updated)
+        ToastService.shared.success("Supplier \(newest.name) attached.")
+        refreshLocal()
     }
 
     private func newPOFromRequest() -> PurchaseOrder {
@@ -3330,7 +3418,21 @@ struct POCreateEditView: View {
         _status             = State(initialValue: po?.status ?? .draft)
     }
 
-    private var isNew: Bool { po == nil }
+    /// FIX (BV-MR-2026-0001 follow-up): `isNew` now checks store
+    /// membership instead of `po == nil`. Pre-fix the MR-driven flow
+    /// passed a freshly-built `newPOFromRequest()` PO into the init,
+    /// which made `po != nil`, so isNew was false and the Save path
+    /// routed to `updatePurchaseOrder()` — which silently no-ops when
+    /// the row doesn't exist in store yet. Net effect: user tapped
+    /// Save, sheet dismissed, no PO was ever created. Checking store
+    /// membership handles both call sites correctly:
+    ///   • Global "+" → po=nil → isNew=true → addPurchaseOrder
+    ///   • Edit existing → po=existing in store → isNew=false → updatePurchaseOrder
+    ///   • MR-spawned new → po=prefill NOT in store → isNew=true → addPurchaseOrder
+    private var isNew: Bool {
+        guard let p = po else { return true }
+        return !store.purchaseOrders.contains { $0.id == p.id }
+    }
     private var subtotal: Decimal { lineItems.reduce(0) { $0 + $1.totalCost } }
     private var taxAmount: Decimal { (subtotal * taxRate).rounded(scale: 2) }
     private var total: Decimal { subtotal + taxAmount }
@@ -3341,8 +3443,10 @@ struct POCreateEditView: View {
     /// post-terminal would shift booked AP balances and supplier
     /// performance metrics.
     /// Locked states: `.received`, `.closed`, `.cancelled` (per `isOpen`).
+    /// FIX (BV-MR-2026-0001): new POs are never locked, regardless of
+    /// their seed status, since they haven't been recorded yet.
     private var isLocked: Bool {
-        guard let p = po else { return false }
+        guard let p = po, !isNew else { return false }
         return !p.status.isOpen
     }
 
@@ -3895,4 +3999,13 @@ private struct IdentifiableIdx: Identifiable {
     let id: Int
     let value: Int
     init(value: Int) { self.id = value; self.value = value }
+}
+
+/// FIX (BV-MR-2026-0001): wrapper so a `URL` can drive a
+/// `.sheet(item:)` binding. SwiftUI requires the item to be
+/// Identifiable; URL is not. The url's string is stable enough to
+/// serve as the id for a single-sheet preview flow.
+struct IdentifiableURL: Identifiable {
+    let url: URL
+    var id: String { url.absoluteString }
 }

@@ -98,8 +98,17 @@ enum POStatus: String, Codable, CaseIterable {
         }
     }
 
+    /// FIX (BV-MR-2026-0001 follow-up): .draft must be in the open set.
+    /// Pre-fix this set was `[.sent, .confirmed, .partial]`, so newly-
+    /// drafted POs flagged `isLocked = !status.isOpen = true` and the
+    /// entire `POCreateEditView` form rendered as disabled. Users
+    /// reported "the area is locked and you cant make entry" on the
+    /// Create PO Manually sheet. Adding .draft brings POStatus into
+    /// alignment with MaterialRequestStatus (which already treats
+    /// drafts as open) and matches the lock-on-terminal-state intent
+    /// — only received / closed / cancelled should lock the form.
     var isOpen: Bool {
-        [.sent, .confirmed, .partial].contains(self)
+        [.draft, .sent, .confirmed, .partial].contains(self)
     }
 }
 
