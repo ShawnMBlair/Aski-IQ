@@ -178,6 +178,20 @@ extension AppStore {
                     projectID: protected.projectID
                 )
             }
+            // v1.1 — workType change audit. Routing depends on this
+            // field so the change should always be visible in history.
+            if existing.workType != protected.workType {
+                logCRMActivity(
+                    type: .workTypeChanged,
+                    title: "Work Type changed: \(existing.workType.displayName) → \(protected.workType.displayName)",
+                    notes: protected.workType.routingDescription,
+                    clientID: protected.clientID,
+                    contactID: protected.contactID,
+                    opportunityID: protected.id,
+                    quoteID: protected.quoteID,
+                    projectID: protected.projectID
+                )
+            }
             crmOpportunities[idx] = protected
         } else {
             crmOpportunities.append(updated)

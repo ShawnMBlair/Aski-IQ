@@ -98,6 +98,7 @@ struct CRMReportsView: View {
                     KPIRow(store: store, start: dateInterval.start, end: dateInterval.end)
                     PipelineFunnelCard(store: store)
                     WinLossCard(store: store, start: dateInterval.start, end: dateInterval.end)
+                    WorkTypeMixCard(store: store, start: dateInterval.start, end: dateInterval.end)
                     RevenueByServiceCard(store: store, start: dateInterval.start, end: dateInterval.end)
                     LossReasonsCard(store: store, start: dateInterval.start, end: dateInterval.end)
                     LeadSourceCard(store: store, start: dateInterval.start, end: dateInterval.end)
@@ -869,6 +870,83 @@ private struct LeadSourceCard: View {
                                 y: .value("Source", row.source)
                             )
                             .foregroundStyle(colors[idx % colors.count])
+                            .cornerRadius(4)
+                            .annotation(position: .trailing) {
+                                Text("\(row.count)")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                    .chartXAxis {
+                        AxisMarks { val in
+                            AxisValueLabel {
+                                if let d = val.as(Double.self) {
+                                    Text(currencyShort(Decimal(d)))
+                                        .font(.caption2)
+                                }
+                            }
+                            AxisGridLine()
+                        }
+                    }
+                    .frame(height: CGFloat(data.count) * 38 + 20)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Work Type Mix Card (v1.1)
+//
+// Segments the pipeline by SaleType. Counts and total value per
+// work type — same shape as the LeadSource card. Win-rate-by-
+// workType is a v1.2 follow-up; v1.1 ships the simpler mix view.
+
+private struct WorkTypeMixCard: View {
+    let store: AppStore
+    let start: Date?
+    let end:   Date?
+
+    private struct Row: Identifiable {
+        let id   = UUID()
+        let type: SaleType
+        let count: Int
+        let value: Decimal
+    }
+
+    private var data: [Row] {
+        let opps = store.crmOpportunities.filter { o in
+            guard !o.isDeleted else { return false }
+            if let s = start, o.createdAt < s { return false }
+            if let e = end, o.createdAt > e { return false }
+            return true
+        }
+        let grouped = Dictionary(grouping: opps, by: \.workType)
+        return SaleType.allCases
+            .compactMap { t -> Row? in
+                guard let bucket = grouped[t], !bucket.isEmpty else { return nil }
+                return Row(
+                    type: t,
+                    count: bucket.count,
+                    value: bucket.reduce(Decimal(0)) { $0 + $1.value }
+                )
+            }
+            .sorted { $0.value > $1.value }
+    }
+
+    var body: some View {
+        ReportCard(title: "Pipeline by Work Type", icon: "arrow.triangle.branch", color: .accentColor) {
+            if data.isEmpty {
+                emptyState("No opportunities in this period")
+            } else {
+                VStack(spacing: 0) {
+                    Chart {
+                        ForEach(data) { row in
+                            BarMark(
+                                x: .value("Value", NSDecimalNumber(decimal: row.value).doubleValue),
+                                y: .value("Work Type", row.type.displayName)
+                            )
+                            .foregroundStyle(row.type.color)
                             .cornerRadius(4)
                             .annotation(position: .trailing) {
                                 Text("\(row.count)")

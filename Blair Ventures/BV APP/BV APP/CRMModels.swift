@@ -193,6 +193,14 @@ struct CRMOpportunity: Identifiable, Codable, Equatable {
     var contactID:        UUID?            = nil
     var title:            String           = ""
     var stage:            OpportunityStage = .newLead
+    /// v1.1 — routing classification (which downstream module this
+    /// opportunity converts into). Unified with `SaleType` (defined
+    /// in MaterialSale.swift) — that enum already had the 5 cases +
+    /// `usesEstimateFlow` routing helper used by CommercialContext,
+    /// so we reuse it instead of duplicating.
+    /// DB: crm_opportunities.work_type (NOT NULL DEFAULT 'project_work',
+    /// CHECK in 5 values — see WT1 + WT1a migrations).
+    var workType:         SaleType         = .projectWork
     var value:            Decimal          = 0
     var serviceType:      String           = ""
     var siteAddress:      String           = ""
@@ -350,6 +358,7 @@ enum CRMActivityType: String, Codable, CaseIterable {
     case invoicePaid         = "Invoice Paid"
     case materialSaleCreated = "Material Sale Created"
     case quoteCreated        = "Quote Created"
+    case workTypeChanged     = "Work Type Changed"
 
     var icon: String {
         switch self {
@@ -375,6 +384,7 @@ enum CRMActivityType: String, Codable, CaseIterable {
         case .invoicePaid:         return "checkmark.seal.fill"
         case .materialSaleCreated: return "shippingbox.fill"
         case .quoteCreated:        return "doc.richtext.fill"
+        case .workTypeChanged:     return "arrow.triangle.branch"
         }
     }
 
@@ -399,6 +409,7 @@ enum CRMActivityType: String, Codable, CaseIterable {
         case .invoicePaid:                return .green
         case .materialSaleCreated:        return .purple
         case .quoteCreated:               return .indigo
+        case .workTypeChanged:            return .orange
         }
     }
 }
