@@ -1,64 +1,57 @@
-# Expenses v1.1 — capture, approval queue, PDF report
+# v1.2 #5 — AI assistant "next action" upgrade
 
-Implements the locked Expenses v1 spec (`project_expenses_v1_spec.md`, Path-confirmed 2026-05-11). **4 commits** on top of post-workType main. Adds full schema, sync engine, capture UI, approval queue, approval state machine, audit log integration, and an audit-binder-style PDF report.
+Closes the highest-leverage item in the v1.2 operational-refinements spec (`project_operational_refinements_v1_2.md`). 1 commit on top of post-Expenses main.
 
-## Summary
+## What this fixes
 
-Field workers, Office Staff, and managers now have a complete expense workflow:
+The in-app AI assistant already detected gap conditions — empty crews, missing project budgets, stalled opportunities, expired certifications, pending expenses, failed syncs — but emitted *descriptions* ("crew has 0 members"). Users had to translate descriptions into actions themselves.
 
-- **Capture** — vendor + date + amount + category + paid-by + cost destination (Company / Project / Material Request) + photo receipt — all in a single sheet. Auto-approval path for company-card spends ≤ $250 with no flags; everything else lands in Pending Approval.
-- **Approve** — shared first-to-approve-wins queue. Inline flag chips (Missing Receipt / Over $250 / Over $5K / Reimbursement / On-Behalf-Of) make decisions fast. Self-approval blocked at the DB and the service layer.
-- **Report** — generate a PDF with the charge table up front and receipt images appended as separate pages (audit-binder style). Share via UIActivityViewController — Files, Mail, AirDrop, Print.
+This branch ships a deterministic detection layer that emits *actions* with specific CTAs and deep-link destinations. The user taps the action; the app takes them where they need to go.
 
-## Migrations applied to staging + prod (2026-05-12)
+## What's in here
 
-- **EXP1** — `expenses` table: 43 columns, 8 CHECK constraints (single-destination, reimbursement-consistency, no-self-approval, plus column-level enums), 7 indexes (PK + per-company unique on expense_number + 5 partial filter indexes for approval / reimbursement / project / MR / owner queues), 4 RLS policies, `updated_at` trigger.
-- **EXP2** — `expense_attachments` table: 20 columns, `expense_id` FK with `ON DELETE CASCADE`, bytea inline binary, 4 RLS policies.
-- Zero advisor diff after apply (no new RLS-no-policy, no new function-search-path-mutable).
+### `AskiNextActionEngine.swift` (pure-Swift, no Claude calls)
 
-## Commits
+6 rule families, each capped at 5 items max to keep the dashboard readable:
 
-| SHA | Scope |
-|---|---|
-| `0321f1c` | `AppStore.expenses` + `AppStore.expenseAttachments` published properties, `SupabaseTable.expenses` + `SupabaseTable.expenseAttachments` constants, `MultiCompany.resetTenantCaches()` clears them on swap, `SyncEngineExpenses.swift` pull + push for both tables with `recordSyncError` / `clearSyncError` on each catch, slotted into `pullAll()` and `pushPending()` |
-| `5f3d013` | `ExpenseViews.swift` — `ExpenseListView` (filter chips, search, summary bar, +button), `ExpenseCreateEditView` (single-form capture with photos-picker), `ExpenseDetailView`, `ApprovalStateBadge` + `ExpenseRow` helpers, `AppStore.upsertExpense` / `upsertExpenseAttachment` helpers, EXP1/EXP2 SQL files marked APPLIED |
-| `0d8c9af` | `ExpenseApprovalService.swift` (typed errors, eligibility checks gating role + self-approval + tier ladder), `ExpenseApprovalQueueView.swift` (shared queue, "All / I Can Approve" filter, inline flag chips, rejection-reason alert, big approve/reject buttons), RootView More-tab gains "Expenses" + "Expense Approvals" entries with pending-count badges |
-| `5f3548e` | `ExpensePDFRenderer.swift` — cover page + charge table with header redraw on page break + totals row + receipt appendix (PDFKit for native PDFs, UIImage.draw for images), Share PDF action wired into Detail view ⋯ menu |
+| # | Rule | Severity | CTA |
+|---|---|---|---|
+| 1 | Active crew, zero members | warning | Assign Workers |
+| 2 | Active project with approved quote + no `ProjectBudget` row | action | Create From Quote |
+| 3 | Open opportunity, no open task, no activity in 14+ days | action | Schedule Follow-Up |
+| 4 | Certificate expired or expiring within 14 days | critical / warning | Renew |
+| 5 | Pending-approval expense ($5K+ → critical) | critical / action | Review |
+| 6 | Records in `.failed` sync state (rolled up via `store.totalFailedSyncCount`) | warning | Open Failed Syncs |
 
-## v1.1 locked rules (from spec)
+Returns sorted by severity desc. `AskiNextAction.Destination` enum carries business-logic types (UUIDs, not SwiftUI types) so the engine is trivially testable.
 
-| Rule | Enforced where |
-|---|---|
-| Self-approval blocked regardless of role | DB CHECK `expenses_no_self_approval_check` + `ExpenseApprovalService.canApprove` |
-| Single cost destination per expense | DB CHECK `expenses_single_destination_check` |
-| Reimbursable iff personal-paid | DB CHECK `expenses_reimbursement_consistency_check` |
-| < $250 company-card auto-approves if no flags | `Expense.qualifiesForAutoApproval(attachments:)` |
-| Reimbursements always require approval | `ExpenseCreateEditView.save` forces `.pendingApproval` when reimbursable |
-| > $5K needs Admin/Executive | `ExpenseApprovalService.canApprove` role gate |
-| Rejection requires a reason | UI alert + service `ExpenseApprovalError.missingRejectionReason` |
-| Submitted-on-behalf-of tracked across 4 fields | `Expense.createdBy`, `submittedBy`, `expenseOwnerEmployeeID`, `submittedOnBehalfOf` (DB + Swift) |
+### `NextActionsCard.swift` (SwiftUI)
+
+- Mounts on the dashboard. Header shows count badge.
+- Each action row: severity-colored icon, title, 2-line detail, CTA pill aligned right.
+- Empty state: "You're all caught up" — visible reassurance that the detector ran successfully even when there's nothing to act on.
+- `failedSyncs` route presents the existing `FailedSyncDetailView` sheet end-to-end.
+- The 5 other destinations capture taps into a `pendingDestination` state — full deep-linking lands in v1.3 once each target view gets an `initialID:` init.
+
+### `OfficeDashboardView` mount
+
+The card sits between WeatherCard and the KPI grid — high enough up that opening the app surfaces what needs attention.
 
 ## Test plan
 
 - [x] iOS simulator build green (iPhone 17 / iOS 26.4.1)
 - [x] Mac Catalyst build green
 - [x] 58 unit tests pass (no regressions)
-- [x] EXP1 + EXP2 verified on staging + prod (43 + 20 columns, 4 + 4 RLS policies, RLS enabled both)
-- [ ] Manual smoke — iPad: capture a receipt with company card under $250 → expect `.autoApproved` on save
-- [ ] Manual smoke — iPad: capture a personal-paid receipt for any amount → expect `.pendingApproval`
-- [ ] Manual smoke — iPhone: switch user to non-approver role → submit → second device approver-role taps Approve → first device sees `.approved`
-- [ ] Manual smoke — Mac Catalyst: open ⋯ → Share PDF Report → save to Files → verify charge table + receipt appendix
-- [ ] Manual smoke — switch companies on Multi-Company switcher → Expenses tab is empty (no cross-tenant leak)
+- [ ] Manual smoke — iPad: open dashboard with a clean tenant → empty state shows
+- [ ] Manual smoke — iPad: create a crew without members → "Crew has no workers" card appears
+- [ ] Manual smoke — iPhone: trigger a sync failure (offline) → "Records didn't save" card appears → tap → Failed Syncs sheet opens
+- [ ] Manual smoke — Mac Catalyst: card renders at full width (currently uses 16pt horizontal padding; verify it doesn't look orphaned on wide layouts)
 
-## Deferred to v1.2 / external dependencies
+## Deferred to v1.3 (or separate v1.2 commits)
 
-- **CSV export** — schema depends on Helen's answer (Sage / QuickBooks / Xero / other). Code path is a follow-up commit.
-- **Batched-per-employee PDF** — current PDF is on-demand single-expense. Multi-expense bulk action on the list view ships as a v1.2 follow-up.
-- **Direct camera attach** — current capture uses PhotosPicker (library) only. Mirroring the DJR / Cert camera pattern is a v1.2 add.
-- **Monotonic `BV-EXP-2026-####` numbering** — v1.1 uses a placeholder format; proper `NumberGenerationService` extension with the EXP prefix is a small follow-up.
-
-## Rollback
-
-Both EXP1 + EXP2 are isolated additive tables — `drop table public.expense_attachments` then `drop table public.expenses cascade` removes everything cleanly.
+- Deep-link destinations for expense / opportunity / crew / project / certificate (each target view needs an `initialID:` init)
+- Foreman dashboard mount (separate dashboard, different roles see different actions)
+- Auto-resolve closures (e.g. "Create budget from quote" could one-tap rather than navigate)
+- Custom severity ordering / dismissal (user-tier preference)
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
