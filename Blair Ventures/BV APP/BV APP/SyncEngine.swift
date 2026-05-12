@@ -118,6 +118,10 @@ final class SyncEngine: ObservableObject {
         await pullStockLocations()
         await pullStockLevels()
         await pullInventoryTransfers()
+        // Phase 9 / Expenses v1.1 — pull parent expenses first, then
+        // attachments (which FK back to expenses.id).
+        await pullExpenses()
+        await pullExpenseAttachments()
         await pullChangeOrders(role: role)
         await pullRFIs(role: role)
         await pullProjectBudgets(role: role)
@@ -444,6 +448,12 @@ final class SyncEngine: ObservableObject {
         await pushPendingContractMilestones()
         await pushPendingComplianceDocuments()
         await pushPendingLienWaivers()
+
+        // Phase 9 / Expenses v1.1 — parent expenses first, then
+        // attachments (FK to expenses.id). Both reference projects /
+        // material_requests / employees which are already pushed above.
+        await pushPendingExpenses()
+        await pushPendingExpenseAttachments()
 
         // 11. Reports / library / settings — these have light FK deps
         // so they can run last without cascading failures.

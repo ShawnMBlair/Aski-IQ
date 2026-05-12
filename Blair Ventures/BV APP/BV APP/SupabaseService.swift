@@ -150,6 +150,9 @@ enum SupabaseTable {
     static let stockLocations        = "stock_locations"
     static let inventoryStockLevels  = "inventory_stock_levels"
     static let inventoryTransfers    = "inventory_transfers"
+    // Phase 9 / Expenses v1.1
+    static let expenses              = "expenses"
+    static let expenseAttachments    = "expense_attachments"
 }
 
 // MARK: - App User Profile
