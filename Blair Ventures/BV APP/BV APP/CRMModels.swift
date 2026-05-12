@@ -184,6 +184,78 @@ struct CRMContact: Identifiable, Codable, Equatable {
     }
 }
 
+// MARK: - Opportunity Work Type
+//
+// Classification of HOW an opportunity monetizes and which downstream
+// module it routes through. Distinct from `serviceType` (free-text
+// trade category — Scaffolding, Insulation, Containment, Painting,
+// etc.) and from `OpportunityType` in Estimate.swift (how the work
+// came in — RFQ vs Negotiated etc.).
+//
+// Locked spec: project_opportunity_worktype_v1_1.md (Path A).
+// DB column: crm_opportunities.work_type (see WT1 migration).
+
+enum OpportunityWorkType: String, Codable, CaseIterable, Identifiable {
+    case projectWork    = "project_work"
+    case serviceWork    = "service_work"
+    case materialSales  = "material_sales"
+    case rental         = "rental"
+    case directInvoice  = "direct_invoice"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .projectWork:    return "Project Work"
+        case .serviceWork:    return "Service Work"
+        case .materialSales:  return "Material Sales"
+        case .rental:         return "Rental"
+        case .directInvoice:  return "Direct Invoice"
+        }
+    }
+
+    /// SF Symbol for use on detail-view badges and pickers.
+    var icon: String {
+        switch self {
+        case .projectWork:    return "hammer.fill"
+        case .serviceWork:    return "wrench.and.screwdriver.fill"
+        case .materialSales:  return "shippingbox.fill"
+        case .rental:         return "calendar.badge.clock"
+        case .directInvoice:  return "doc.text.fill"
+        }
+    }
+
+    /// One-line description of where this work type routes after the
+    /// opportunity is converted. Used in pickers + activity-log
+    /// descriptions to make routing behavior explicit to the user.
+    var routingDescription: String {
+        switch self {
+        case .projectWork:
+            return "Opportunity → Estimate → Quote → Project → Progress Invoices"
+        case .serviceWork:
+            return "Opportunity → Work Order → Invoice (uses Project flow in v1.1)"
+        case .materialSales:
+            return "Opportunity → Material Sale → Quote/Order/Invoice"
+        case .rental:
+            return "Opportunity → Rental Record → Return Tracking → Invoice (uses Project flow in v1.1)"
+        case .directInvoice:
+            return "Opportunity → Invoice (skip Estimate + Quote)"
+        }
+    }
+
+    /// Forward-compat decode fallback. If the server one day returns a
+    /// 6th value (e.g. `equipment_lease`) the iOS client logs the
+    /// unknown raw and defaults to `.projectWork` rather than crashing.
+    /// Same pattern as UserRole's unknownRoleHandler.
+    static func decoded(from raw: String) -> OpportunityWorkType {
+        if let known = OpportunityWorkType(rawValue: raw) { return known }
+        #if DEBUG
+        print("⚠️ OpportunityWorkType: unknown raw '\(raw)' — defaulting to projectWork")
+        #endif
+        return .projectWork
+    }
+}
+
 // MARK: - CRM Opportunity
 
 struct CRMOpportunity: Identifiable, Codable, Equatable {
@@ -193,6 +265,10 @@ struct CRMOpportunity: Identifiable, Codable, Equatable {
     var contactID:        UUID?            = nil
     var title:            String           = ""
     var stage:            OpportunityStage = .newLead
+    /// New in v1.1: routing classification. Defaults to .projectWork
+    /// because that's the path 99% of pre-v1.1 opportunities followed
+    /// (matches WT1 migration's column default).
+    var workType:         OpportunityWorkType = .projectWork
     var value:            Decimal          = 0
     var serviceType:      String           = ""
     var siteAddress:      String           = ""
@@ -350,6 +426,7 @@ enum CRMActivityType: String, Codable, CaseIterable {
     case invoicePaid         = "Invoice Paid"
     case materialSaleCreated = "Material Sale Created"
     case quoteCreated        = "Quote Created"
+    case workTypeChanged     = "Work Type Changed"
 
     var icon: String {
         switch self {
@@ -375,6 +452,7 @@ enum CRMActivityType: String, Codable, CaseIterable {
         case .invoicePaid:         return "checkmark.seal.fill"
         case .materialSaleCreated: return "shippingbox.fill"
         case .quoteCreated:        return "doc.richtext.fill"
+        case .workTypeChanged:     return "arrow.triangle.branch"
         }
     }
 
@@ -399,6 +477,7 @@ enum CRMActivityType: String, Codable, CaseIterable {
         case .invoicePaid:                return .green
         case .materialSaleCreated:        return .purple
         case .quoteCreated:               return .indigo
+        case .workTypeChanged:            return .orange
         }
     }
 }

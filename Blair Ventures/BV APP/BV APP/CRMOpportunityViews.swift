@@ -341,15 +341,28 @@ private struct PipelineCardView: View {
                     .font(.caption).foregroundColor(.secondary).lineLimit(1)
             }
 
-            // Service type pill
-            if !opp.serviceType.isEmpty {
-                Text(opp.serviceType)
+            // workType + serviceType pills, side-by-side
+            HStack(spacing: 6) {
+                // Work-type pill (v1.1) — always shown.
+                Label(opp.workType.displayName, systemImage: opp.workType.icon)
                     .font(.caption2.weight(.medium))
+                    .labelStyle(.titleAndIcon)
                     .padding(.horizontal, 7)
                     .padding(.vertical, 3)
-                    .background(opp.stage.color.opacity(0.1))
-                    .foregroundColor(opp.stage.color)
+                    .background(Color.accentColor.opacity(0.12))
+                    .foregroundColor(.accentColor)
                     .cornerRadius(6)
+
+                // Trade / service-type pill — only when set.
+                if !opp.serviceType.isEmpty {
+                    Text(opp.serviceType)
+                        .font(.caption2.weight(.medium))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(opp.stage.color.opacity(0.1))
+                        .foregroundColor(opp.stage.color)
+                        .cornerRadius(6)
+                }
             }
 
             Divider()
@@ -832,8 +845,22 @@ private struct OpportunityDetailsSection: View {
                 Divider().padding(.leading, 16)
 
                 FormRow {
-                    TextField("Service Type", text: $opp.serviceType)
+                    TextField("Service Type (trade)", text: $opp.serviceType)
                         .font(.subheadline)
+                }
+
+                Divider().padding(.leading, 16)
+
+                // Work-type editable picker (v1.1). Distinct from
+                // serviceType above. Changing this fires a workType
+                // audit event in the parent save path.
+                FormRow {
+                    Picker("Work Type", selection: $opp.workType) {
+                        ForEach(OpportunityWorkType.allCases) { wt in
+                            Label(wt.displayName, systemImage: wt.icon).tag(wt)
+                        }
+                    }
+                    .font(.subheadline)
                 }
 
                 Divider().padding(.leading, 16)
@@ -1772,6 +1799,10 @@ struct CRMOpportunityCreateSheet: View {
     @State private var siteAddress: String = ""
     @State private var stage: OpportunityStage = .newLead
     @State private var source: LeadSource = .directInquiry
+    /// v1.1 — classification dimension that drives downstream routing.
+    /// Distinct from serviceType (trade) above. Defaults to .projectWork
+    /// matching the WT1 column default.
+    @State private var workType: OpportunityWorkType = .projectWork
     @State private var notes: String = ""
     @State private var showValidationError: Bool = false
 
@@ -1806,12 +1837,31 @@ struct CRMOpportunityCreateSheet: View {
                     Text("Client")
                 }
 
+                // Work-type — locked Path A v1.1. Required, drives the
+                // downstream module routing (Project / Material Sale /
+                // Direct Invoice / Service / Rental).
+                Section {
+                    Picker("Work Type", selection: $workType) {
+                        ForEach(OpportunityWorkType.allCases) { wt in
+                            Label(wt.displayName, systemImage: wt.icon).tag(wt)
+                        }
+                    }
+                    Text(workType.routingDescription)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } header: {
+                    Text("Work Type")
+                } footer: {
+                    Text("Determines how this opportunity converts: Estimate / Material Sale / Direct Invoice / Rental / Service.")
+                }
+
                 // Opportunity details
                 Section("Opportunity Details") {
                     TextField("Title *", text: $title)
                         .textInputAutocapitalization(.sentences)
 
-                    TextField("Service Type", text: $serviceType)
+                    TextField("Service Type (trade)", text: $serviceType)
                         .textInputAutocapitalization(.words)
 
                     TextField("Value ($)", text: $valueText)
@@ -1886,6 +1936,7 @@ struct CRMOpportunityCreateSheet: View {
         opp.stage = stage
         opp.probability = stage.defaultProbability
         opp.source = source
+        opp.workType = workType
         opp.notes = notes.trimmingCharacters(in: .whitespaces)
 
         store.upsertCRMOpportunity(opp)

@@ -195,6 +195,11 @@ extension SyncEngine {
                 let notes: String?
                 let contact_id, estimate_id, quote_id, project_id, assigned_to_id: String?
                 let estimated_start, created_at, updated_at, won_at, lost_at: String?
+                // v1.1 — workType routing classification (WT1 migration).
+                // Optional in the decode so pre-WT1 pulls still parse;
+                // the SyncErrorMapper / decoder defaults to .projectWork
+                // when absent.
+                let work_type: String?
                 // Sample-data tracking
                 let is_sample_data: Bool?
                 let sample_data_batch_id: String?
@@ -223,6 +228,7 @@ extension SyncEngine {
                 o.id              = id
                 o.title           = row.title
                 o.stage           = OpportunityStage(rawValue: row.stage) ?? .newLead
+                o.workType        = row.work_type.map { OpportunityWorkType.decoded(from: $0) } ?? .projectWork
                 o.value           = crmDecimal(row.value)
                 o.serviceType     = row.service_type ?? ""
                 o.siteAddress     = row.site_address ?? ""
@@ -269,6 +275,7 @@ extension SyncEngine {
                     "client_id":        .string(o.clientID.uuidString),
                     "title":            .string(o.title),
                     "stage":            .string(o.stage.rawValue),
+                    "work_type":        .string(o.workType.rawValue),
                     "value":            .double(crmDouble(o.value)),
                     "service_type":     .string(o.serviceType),
                     "site_address":     .string(o.siteAddress),
