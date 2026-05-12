@@ -310,6 +310,21 @@ private struct MoreEquipmentSection: View {
                 MoreBadgeRow(label: "Inventory Movements", icon: "arrow.left.arrow.right",
                              count: 0, color: .secondary)
             }
+            // Phase 9 / Expenses v1.1 — entry point. Badge surfaces
+            // pending-approval count so eligible approvers see work
+            // waiting on them without drilling in.
+            NavigationLink(destination: ExpenseListView()) {
+                MoreBadgeRow(label: "Expenses", icon: "creditcard.fill",
+                             count: store.expenses.filter { $0.approvalState == .pendingApproval && !$0.isDeleted }.count,
+                             color: .orange)
+            }
+            if store.currentUserRole.canApproveTimesheets {
+                NavigationLink(destination: ExpenseApprovalQueueView()) {
+                    MoreBadgeRow(label: "Expense Approvals", icon: "checkmark.seal.fill",
+                                 count: store.expenses.filter { $0.approvalState == .pendingApproval && !$0.isDeleted }.count,
+                                 color: .green)
+                }
+            }
         }
     }
 }

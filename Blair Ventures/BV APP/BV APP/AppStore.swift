@@ -60,6 +60,11 @@ final class AppStore: ObservableObject {
     @Published var inventoryStockLevels:  [InventoryStockLevel] = []
     @Published var inventoryTransfers:    [InventoryTransfer]   = []
 
+    // Phase 9 / Expenses v1.1 — see Expense.swift + ExpenseAttachment.swift
+    // + project_expenses_v1_spec.md (locked 2026-05-11).
+    @Published var expenses:           [Expense]           = []
+    @Published var expenseAttachments: [ExpenseAttachment] = []
+
     /// Per-record sync error metadata. Populated by sync push catch
     /// blocks via `recordSyncError(id:error:)`; cleared on successful
     /// retry / discard. In-memory only — failed records reattempt on

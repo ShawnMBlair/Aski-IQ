@@ -200,6 +200,8 @@ extension AppStore {
         stockLocations = []
         inventoryStockLevels = []
         inventoryTransfers = []
+        expenses = []
+        expenseAttachments = []
     }
 }
 
