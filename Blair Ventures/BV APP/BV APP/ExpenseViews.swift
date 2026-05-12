@@ -482,6 +482,7 @@ struct ExpenseDetailView: View {
     let expenseID: UUID
 
     @State private var showEdit = false
+    @State private var sharePDFData: Data? = nil
 
     private var expense: Expense? {
         store.expenses.first(where: { $0.id == expenseID })
@@ -489,6 +490,17 @@ struct ExpenseDetailView: View {
 
     private var attachments: [ExpenseAttachment] {
         store.expenseAttachments.filter { $0.expenseID == expenseID && !$0.isDeleted }
+    }
+
+    private func generatePDF() -> Data? {
+        guard let expense else { return nil }
+        return ExpensePDFRenderer.render(
+            expenses: [expense],
+            attachmentsByID: [expense.id: attachments],
+            companyName: AppSettings.shared.companyName.isEmpty ? "Aski IQ" : AppSettings.shared.companyName,
+            title: "Expense Report",
+            subtitle: "\(expense.vendor.isEmpty ? "(no vendor)" : expense.vendor) · \(expense.expenseDate.shortDate)"
+        )
     }
 
     var body: some View {
@@ -547,7 +559,20 @@ struct ExpenseDetailView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    Button("Edit") { showEdit = true }
+                    Menu {
+                        Button {
+                            sharePDFData = generatePDF()
+                        } label: {
+                            Label("Share PDF Report", systemImage: "square.and.arrow.up")
+                        }
+                        Button {
+                            showEdit = true
+                        } label: {
+                            Label("Edit", systemImage: "pencil")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
                 }
             }
             .sheet(isPresented: $showEdit) {
@@ -555,6 +580,12 @@ struct ExpenseDetailView: View {
                     ExpenseCreateEditView(expense: expense)
                         .environmentObject(store)
                 }
+            }
+            .sheet(item: Binding(
+                get: { sharePDFData.map { PDFShareItem(data: $0) } },
+                set: { sharePDFData = $0?.data }
+            )) { item in
+                ShareSheet(items: [item.tempURL])
             }
         } else {
             ContentUnavailableView(
@@ -565,6 +596,26 @@ struct ExpenseDetailView: View {
         }
     }
 }
+
+// MARK: - PDF share plumbing
+
+/// Wrapper so the sheet binding can be Identifiable.
+private struct PDFShareItem: Identifiable {
+    let id = UUID()
+    let data: Data
+
+    /// Write the PDF to a temp file so the share sheet can offer
+    /// "Save to Files" / "Mail attachment" / "Print" without holding
+    /// the bytes in memory across the share transition.
+    var tempURL: URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ExpenseReport-\(id.uuidString.prefix(8)).pdf")
+        try? data.write(to: url)
+        return url
+    }
+}
+
+// Reuses the existing ShareSheet from PayrollExportView.swift.
 
 // MARK: - AppStore upsert helpers
 
