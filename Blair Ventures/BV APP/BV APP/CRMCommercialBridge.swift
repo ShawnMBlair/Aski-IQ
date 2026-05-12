@@ -336,9 +336,36 @@ extension AppStore {
 
     @discardableResult
     func ensureCRMLink(for estimate: inout Estimate) -> CRMOpportunity? {
-        // 1. Already linked and the opp still exists
+        // Title resolver: prefer the user-supplied "Estimate / Bid Name"
+        // when set, otherwise fall back to a useful placeholder so the
+        // CRM pipeline never renders a blank row. Recomputed on every
+        // call so renames propagate downstream (see merge step below).
+        let trimmedName = estimate.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let desiredTitle = trimmedName.isEmpty
+            ? "Estimate \(estimate.jobNumber)"
+            : trimmedName
+
+        // 1. Already linked and the opp still exists — propagate name + value
+        //    if the estimate side has been edited since link time. We only
+        //    update opp.title when it's empty or still the auto-generated
+        //    placeholder ("Estimate <jobNumber>"), so a manual rename in CRM
+        //    is never clobbered by a later estimate edit.
         if let oppID = estimate.opportunityID,
-           let existing = crmOpportunities.first(where: { $0.id == oppID && !$0.isDeleted }) {
+           let idx = crmOpportunities.firstIndex(where: { $0.id == oppID && !$0.isDeleted }) {
+            var existing = crmOpportunities[idx]
+            let oldTitle = existing.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isAutoTitle = oldTitle.isEmpty || oldTitle == "Estimate \(estimate.jobNumber)"
+            var changed = false
+            if isAutoTitle && oldTitle != desiredTitle {
+                existing.title = desiredTitle
+                changed = true
+            }
+            if changed {
+                existing.updatedAt = Date()
+                existing.syncStatus = .pending
+                crmOpportunities[idx] = existing
+                Task { await SyncEngine.shared.pushPendingCRMOpportunities() }
+            }
             return existing
         }
 
@@ -354,7 +381,7 @@ extension AppStore {
         //    Bypass upsertCRMOpportunity's role check since upsertEstimate already
         //    validated the caller's role. Insert directly and push.
         var opp           = CRMOpportunity(clientID: estimate.clientID)
-        opp.title         = estimate.name
+        opp.title         = desiredTitle
         opp.estimateID    = estimate.id
         opp.contactID     = estimate.primaryContactID
         opp.serviceType   = estimate.opportunityType.displayName
