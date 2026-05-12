@@ -20,6 +20,15 @@ struct OfficeDashboardView: View {
                     // MARK: Weather
                     WeatherCard()
 
+                    // MARK: Next Actions (v1.2 — operational refinements #5)
+                    //
+                    // Surfaces detected gaps as tappable actions instead
+                    // of passive observations. Pulls from
+                    // AskiNextActionEngine — empty crews, missing
+                    // budgets, stalled opportunities, expired certs,
+                    // pending expenses, failed syncs.
+                    NextActionsCard()
+
                     // MARK: KPI Grid — each card navigates to its detail view
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 14) {
                         NavigationLink { FormSubmissionListView() } label: { FormsKPICard() }.buttonStyle(.plain)
