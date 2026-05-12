@@ -1027,7 +1027,7 @@ private struct OpportunityLinksSection: View {
                         }
                     }
                     .buttonStyle(.plain)
-                } else if opp.stage.isActive && store.currentUserRole.canEditCRM {
+                } else if opp.stage.isActive && store.currentUserRole.canEditCRM && opp.workType.routesToProjectFlowInV1_1 {
                     FormRow {
                         Button { showCreateEstimate = true } label: {
                             HStack {
@@ -1040,6 +1040,27 @@ private struct OpportunityLinksSection: View {
                             }
                         }
                         .buttonStyle(.plain)
+                    }
+                } else if opp.stage.isActive && store.currentUserRole.canEditCRM,
+                          let hint = opp.workType.conversionHint {
+                    // v1.1 routing — work type doesn't follow the project
+                    // flow. Show a guidance row that points the user at
+                    // the correct downstream module.
+                    FormRow {
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: opp.workType.icon)
+                                .foregroundColor(opp.workType.color)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(opp.workType.displayName + " — Conversion")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text(hint)
+                                    .font(.subheadline)
+                                    .foregroundColor(.primary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer()
+                        }
                     }
                 }
 
@@ -1084,7 +1105,7 @@ private struct OpportunityLinksSection: View {
                         }
                         .buttonStyle(.plain)
                     }
-                } else if linkedEstimate == nil && opp.stage.isActive && store.currentUserRole.canEditCRM {
+                } else if linkedEstimate == nil && opp.stage.isActive && store.currentUserRole.canEditCRM && opp.workType.routesToProjectFlowInV1_1 {
                     Divider().padding(.leading, 16)
                     FormRow {
                         Button { showQuickQuote = true } label: {
@@ -1109,10 +1130,15 @@ private struct OpportunityLinksSection: View {
             .padding(.horizontal, 16)
         }
         .sheet(isPresented: $showCreateEstimate) {
+            // v1.1 — propagate the opportunity's workType into the
+            // CommercialContext so the downstream estimate carries
+            // the right routing tag (matters for serviceWork + rental
+            // which fall back to project flow but should be discoverable
+            // as service/rental in reporting).
             let oppContext = CommercialContext.from(
                 opportunity: opp,
                 clientName:  store.client(id: opp.clientID)?.name ?? "",
-                workType:    .projectWork
+                workType:    opp.workType
             )
             EstimateCreateView(
                 preselectedClientID: opp.clientID,
