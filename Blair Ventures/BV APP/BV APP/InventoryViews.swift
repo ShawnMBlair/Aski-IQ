@@ -256,6 +256,16 @@ struct InventoryItemDetailView: View {
                 if let cost = item.standardCost, cost > 0 {
                     badge("\(cost.currencyString)/unit", color: .secondary)
                 }
+                // Phase 8 / Inventory v2 — surface low-stock state so
+                // the operator sees it at a glance, without having to
+                // mentally compare on-hand against reorderPoint.
+                if store.isLowStock(item) {
+                    if let rp = item.reorderPoint {
+                        badge("Low (≤\(rp))", color: .red)
+                    } else {
+                        badge("Out of stock", color: .red)
+                    }
+                }
                 if !item.isActive {
                     badge("Inactive", color: .orange)
                 }
@@ -368,6 +378,11 @@ struct InventoryItemEditorView: View {
     @Environment(\.dismiss) var dismiss
     @State var item: InventoryItem
     @State private var standardCostString: String = ""
+    /// Phase 8 / Inventory v2 — reorder threshold + suggested-reorder qty
+    /// captured as strings so the user can type freely; parsed into
+    /// `Decimal?` at save time (empty string = nil = no threshold).
+    @State private var reorderPointString: String = ""
+    @State private var reorderQuantityString: String = ""
 
     private var isNew: Bool {
         !store.inventoryItems.contains { $0.id == item.id }
@@ -404,6 +419,33 @@ struct InventoryItemEditorView: View {
                 }
             }
 
+            // Phase 8 / Inventory v2 — reorder threshold UI. Leaving
+            // both fields blank falls back to the v1 "qty ≤ 0" heuristic
+            // so existing items keep their current behavior until the
+            // admin configures explicit values.
+            Section {
+                HStack {
+                    Text("Reorder when at or below")
+                    Spacer()
+                    TextField("e.g. 10", text: $reorderPointString)
+                        .keyboardType(.decimalPad)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 110)
+                }
+                HStack {
+                    Text("Suggested reorder qty")
+                    Spacer()
+                    TextField("e.g. 50", text: $reorderQuantityString)
+                        .keyboardType(.decimalPad)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 110)
+                }
+            } header: {
+                Text("Reorder thresholds")
+            } footer: {
+                Text("Leave blank to use the default 'out of stock' rule (qty hits zero). Suggested qty drives v2.1 auto-PO drafting.")
+            }
+
             Section {
                 Toggle("Active", isOn: $item.isActive)
             } footer: {
@@ -423,18 +465,33 @@ struct InventoryItemEditorView: View {
             }
         }
         .onAppear {
-            standardCostString = item.standardCost.map { "\($0)" } ?? ""
+            standardCostString    = item.standardCost.map     { "\($0)" } ?? ""
+            reorderPointString    = item.reorderPoint.map     { "\($0)" } ?? ""
+            reorderQuantityString = item.reorderQuantity.map  { "\($0)" } ?? ""
         }
     }
 
     private func save() {
-        item.standardCost = Decimal(string: standardCostString.trimmingCharacters(in: .whitespaces))
+        item.standardCost    = Decimal(string: standardCostString.trimmingCharacters(in: .whitespaces))
+        item.reorderPoint    = parsedThreshold(reorderPointString)
+        item.reorderQuantity = parsedThreshold(reorderQuantityString)
         if isNew {
             store.addInventoryItem(item)
         } else {
             store.updateInventoryItem(item)
         }
         dismiss()
+    }
+
+    /// Empty input → nil (no threshold). Negative or junk inputs also
+    /// flip to nil; the DB constraint `inventory_items_reorder_point_nonneg`
+    /// would reject these anyway, but it's cleaner to drop them client-side.
+    private func parsedThreshold(_ s: String) -> Decimal? {
+        let trimmed = s.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty,
+              let d = Decimal(string: trimmed),
+              d >= 0 else { return nil }
+        return d
     }
 }
 

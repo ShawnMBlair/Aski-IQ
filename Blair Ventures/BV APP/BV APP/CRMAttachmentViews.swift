@@ -21,6 +21,11 @@ struct CRMAttachmentSection: View {
     @State private var fullScreenImage: UIImage? = nil
     @State private var isUploading       = false
     @State private var uploadError: String? = nil
+    /// FIX (debug audit): live camera for CRM attachments (meeting
+    /// notes, business card shots, contact records). Same pattern as
+    /// the other photo flows.
+    @State private var showCamera       = false
+    @State private var capturedPhoto: UIImage? = nil
 
     private static let maxFileSizeBytes: Int = 25 * 1024 * 1024  // 25 MB
 
@@ -37,6 +42,15 @@ struct CRMAttachmentSection: View {
                 Spacer()
                 if store.currentUserRole.canEditCRM {
                     Menu {
+                        // FIX (debug audit): live camera shortcut.
+                        // Hidden on devices without a camera.
+                        if CameraPicker.isAvailable {
+                            Button {
+                                showCamera = true
+                            } label: {
+                                Label("Take Photo", systemImage: "camera.fill")
+                            }
+                        }
                         Button {
                             showPhotoPicker = true
                         } label: {
@@ -125,6 +139,42 @@ struct CRMAttachmentSection: View {
         // Full-screen image viewer
         .fullScreenCover(item: $fullScreenImage) { img in
             FullScreenImageViewer(image: img)
+        }
+        // FIX (debug audit): live camera capture.
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraPicker(image: $capturedPhoto)
+                .ignoresSafeArea()
+        }
+        .onChange(of: capturedPhoto) { img in
+            guard let img = img,
+                  let data = img.jpegData(compressionQuality: 0.9) else { return }
+            capturedPhoto = nil
+            isUploading = true
+            Task {
+                await handleCapturedPhoto(data: data)
+                isUploading = false
+            }
+        }
+    }
+
+    /// Camera-captured photo path. Mirrors handlePhotoSelection but
+    /// starts from raw Data already JPEG-encoded by UIImage.
+    private func handleCapturedPhoto(data: Data) async {
+        if data.count > Self.maxFileSizeBytes {
+            await MainActor.run { uploadError = "Photo exceeds 25 MB limit." }
+            return
+        }
+        let fileName = "photo_\(Date().timeIntervalSince1970).jpg"
+        let thumbnail = makeThumbnail(from: data, maxDimension: 200)
+        await MainActor.run {
+            store.addCRMAttachment(
+                entityID:      entityID,
+                entityType:    entityType,
+                fileName:      fileName,
+                fileType:      .image,
+                data:          data,
+                thumbnailData: thumbnail
+            )
         }
     }
 

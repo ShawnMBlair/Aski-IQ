@@ -10,7 +10,7 @@ struct RFIListView: View {
     @EnvironmentObject var store: AppStore
     var projectID: UUID? = nil
 
-    @State private var showCreate = false
+    @State private var flow: RFICreateFlow? = nil
     @State private var filterStatus: RFIStatus? = nil
 
     private var items: [RFI] {
@@ -38,12 +38,45 @@ struct RFIListView: View {
         .refreshable { await store.refreshAll() }
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
-                Button { showCreate = true } label: { Image(systemName: "plus") }
+                Button { handleAddTap() } label: { Image(systemName: "plus") }
                     .disabled(!store.hasCompletedFirstSync)
             }
         }
-        .sheet(isPresented: $showCreate) {
-            RFICreateEditView(projectID: projectID ?? store.projects.first?.id ?? UUID())
+        // Phase 7 / Decision 1: route the toolbar `+` through a project
+        // picker when the list isn't already project-scoped. Pre-fix
+        // the sheet opened with `store.projects.first?.id ?? UUID()`,
+        // producing an FK-failing RFI on push if no projects existed
+        // locally (e.g., fresh login pre-pull or filtered-out role).
+        .sheet(item: $flow) { state in
+            switch state {
+            case .pickParent:
+                RequiredProjectPickerSheet { picked in
+                    flow = .create(picked)
+                }
+                .environmentObject(store)
+            case .create(let pid):
+                RFICreateEditView(projectID: pid)
+                    .environmentObject(store)
+            }
+        }
+    }
+
+    private func handleAddTap() {
+        if let pid = projectID {
+            flow = .create(pid)
+        } else {
+            flow = .pickParent
+        }
+    }
+}
+
+private enum RFICreateFlow: Identifiable {
+    case pickParent
+    case create(UUID)
+    var id: String {
+        switch self {
+        case .pickParent:      return "pickParent"
+        case .create(let id):  return "create-\(id.uuidString)"
         }
     }
 }

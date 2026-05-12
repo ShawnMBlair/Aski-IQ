@@ -191,6 +191,7 @@ private struct PromptEditorSheet: View {
                     }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle(surface.displayName)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

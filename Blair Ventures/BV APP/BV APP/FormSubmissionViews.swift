@@ -1061,6 +1061,9 @@ struct FieldResponseView: View {
 struct PhotoFieldView: View {
     @Binding var response: FormFieldResponse
     @State private var selectedItems: [PhotosPickerItem] = []
+    /// FIX (debug audit): live camera for form-attached photos.
+    @State private var showCamera = false
+    @State private var capturedPhoto: UIImage? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1092,21 +1095,37 @@ struct PhotoFieldView: View {
                 }
             }
 
-            PhotosPicker(
-                selection: $selectedItems,
-                maxSelectionCount: 5,
-                matching: .images
-            ) {
-                Label(response.photoData.isEmpty ? "Add Photo" : "Add Another",
-                      systemImage: "camera")
-                    .font(.subheadline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(Color.blue.opacity(0.08))
-                    .foregroundColor(.blue)
-                    .cornerRadius(10)
+            // FIX (debug audit): camera + library side-by-side.
+            HStack(spacing: 10) {
+                if CameraPicker.isAvailable {
+                    Button {
+                        showCamera = true
+                    } label: {
+                        Label("Take Photo", systemImage: "camera.fill")
+                            .font(.subheadline)
+                            .frame(maxWidth: .infinity).padding(.vertical, 10)
+                            .background(Color.blue)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                    }
+                    .buttonStyle(.plain)
+                }
+                PhotosPicker(
+                    selection: $selectedItems,
+                    maxSelectionCount: 5,
+                    matching: .images
+                ) {
+                    Label(response.photoData.isEmpty ? "From Library" : "Add Another",
+                          systemImage: "photo.on.rectangle")
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Color.blue.opacity(0.08))
+                        .foregroundColor(.blue)
+                        .cornerRadius(10)
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
         }
         .onChange(of: selectedItems) { _, items in
             Task {
@@ -1119,6 +1138,17 @@ struct PhotoFieldView: View {
                 }
                 selectedItems = []
             }
+        }
+        // FIX (debug audit): live camera sheet.
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraPicker(image: $capturedPhoto)
+                .ignoresSafeArea()
+        }
+        .onChange(of: capturedPhoto) { _, img in
+            guard let img = img,
+                  let raw = img.jpegData(compressionQuality: 0.9) else { return }
+            response.photoData.append(compressPhoto(raw))
+            capturedPhoto = nil
         }
     }
 

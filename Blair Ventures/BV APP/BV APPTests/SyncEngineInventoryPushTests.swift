@@ -264,4 +264,103 @@ final class SyncEngineInventoryPushTests: XCTestCase {
             XCTAssertNotNil(store.syncErrors[transfer.id])
         }
     }
+
+    // MARK: - Pulls (Phase 8 / Inventory v1 — pull-side coverage)
+    //
+    // Each pull is exercised with an empty canned response. We assert
+    // the engine issues exactly one select with the expected table +
+    // tenant + soft-delete filter set, matching the
+    // SyncEngineDJRPushTests pattern. Decode coverage (rows → store)
+    // is intentionally light — the round-trip is already exercised
+    // end-to-end via the existing push tests' read-back paths and
+    // the live integration on prod.
+
+    @MainActor
+    func test_pullInventoryItems_issuesCorrectSelectQuery() async throws {
+        try await withFreshStore { store in
+            let fake = FakeSyncClient()
+            let engine = SyncEngine(client: fake)
+            let companyID = try XCTUnwrap(store.currentCompanyID)
+
+            await engine.pullInventoryItems()
+
+            XCTAssertEqual(fake.selects.count, 1)
+            let call = try XCTUnwrap(fake.selects.first)
+            XCTAssertEqual(call.table, SupabaseTable.inventoryItems)
+            XCTAssertTrue(call.filters.contains(.eq("company_id", companyID.uuidString)),
+                          "Expected company_id filter; got \(call.filters)")
+            XCTAssertTrue(call.filters.contains(.eq("is_deleted", false)),
+                          "Expected is_deleted=false filter; got \(call.filters)")
+        }
+    }
+
+    @MainActor
+    func test_pullStockLocations_issuesCorrectSelectQuery() async throws {
+        try await withFreshStore { store in
+            let fake = FakeSyncClient()
+            let engine = SyncEngine(client: fake)
+            let companyID = try XCTUnwrap(store.currentCompanyID)
+
+            await engine.pullStockLocations()
+
+            XCTAssertEqual(fake.selects.count, 1)
+            let call = try XCTUnwrap(fake.selects.first)
+            XCTAssertEqual(call.table, SupabaseTable.stockLocations)
+            XCTAssertTrue(call.filters.contains(.eq("company_id", companyID.uuidString)))
+            XCTAssertTrue(call.filters.contains(.eq("is_deleted", false)))
+        }
+    }
+
+    @MainActor
+    func test_pullStockLevels_issuesCorrectSelectQuery() async throws {
+        try await withFreshStore { store in
+            let fake = FakeSyncClient()
+            let engine = SyncEngine(client: fake)
+            let companyID = try XCTUnwrap(store.currentCompanyID)
+
+            await engine.pullStockLevels()
+
+            XCTAssertEqual(fake.selects.count, 1)
+            let call = try XCTUnwrap(fake.selects.first)
+            XCTAssertEqual(call.table, SupabaseTable.inventoryStockLevels)
+            XCTAssertTrue(call.filters.contains(.eq("company_id", companyID.uuidString)))
+            XCTAssertTrue(call.filters.contains(.eq("is_deleted", false)))
+        }
+    }
+
+    @MainActor
+    func test_pullInventoryTransfers_issuesCorrectSelectQuery() async throws {
+        try await withFreshStore { store in
+            let fake = FakeSyncClient()
+            let engine = SyncEngine(client: fake)
+            let companyID = try XCTUnwrap(store.currentCompanyID)
+
+            await engine.pullInventoryTransfers()
+
+            XCTAssertEqual(fake.selects.count, 1)
+            let call = try XCTUnwrap(fake.selects.first)
+            XCTAssertEqual(call.table, SupabaseTable.inventoryTransfers)
+            XCTAssertTrue(call.filters.contains(.eq("company_id", companyID.uuidString)))
+            XCTAssertTrue(call.filters.contains(.eq("is_deleted", false)))
+        }
+    }
+
+    @MainActor
+    func test_pullInventoryItems_missingCompanyID_skipsCall() async throws {
+        try await withFreshStore { store in
+            let fake = FakeSyncClient()
+            let engine = SyncEngine(client: fake)
+
+            // Wipe the company scope so the guard at the top of pull
+            // returns without hitting the network. Defense-in-depth on
+            // top of RLS — if currentCompanyID isn't set yet (cold-
+            // launch before auth completes), no select should fire.
+            store.currentCompanyID = nil
+
+            await engine.pullInventoryItems()
+
+            XCTAssertEqual(fake.selects.count, 0,
+                           "Pull should short-circuit when currentCompanyID is nil")
+        }
+    }
 }

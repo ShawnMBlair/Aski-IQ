@@ -146,6 +146,41 @@ extension AppStore {
         return activeStockLocations.filter { locIDs.contains($0.id) }
     }
 
+    // MARK: - Inventory v2: low-stock detection
+
+    /// Phase 8 / Inventory v2 — true when an item is at or below its
+    /// configured reorder point. Falls back to the v1 "qty ≤ 0"
+    /// heuristic for items that haven't been configured yet, so
+    /// dashboards keep working during the v1→v2 transition.
+    func isLowStock(_ item: InventoryItem) -> Bool {
+        guard !item.isDeleted && item.isActive else { return false }
+        let onHand = totalQuantityOnHand(itemID: item.id)
+        if let threshold = item.reorderPoint {
+            return onHand <= threshold
+        }
+        return onHand <= 0
+    }
+
+    /// All currently-active items at or below their reorder point.
+    /// Sorted by qty-deficit (biggest gap first) so the most urgent
+    /// items surface at the top of dashboards / suggested-PO lists.
+    var lowStockItems: [InventoryItem] {
+        inventoryItems
+            .filter { isLowStock($0) }
+            .sorted { lhs, rhs in
+                let lhsGap = (lhs.reorderPoint ?? 0) - totalQuantityOnHand(itemID: lhs.id)
+                let rhsGap = (rhs.reorderPoint ?? 0) - totalQuantityOnHand(itemID: rhs.id)
+                return lhsGap > rhsGap
+            }
+    }
+
+    /// Items that have been explicitly configured with a reorder point
+    /// (excludes those falling back to the v1 heuristic). Used by the
+    /// "configured threshold coverage" widget in admin settings.
+    var itemsWithReorderConfigured: [InventoryItem] {
+        inventoryItems.filter { !$0.isDeleted && $0.isActive && $0.reorderPoint != nil }
+    }
+
     // MARK: - InventoryTransfer CRUD
 
     /// All transfers for the current tenant, excluding soft-deleted.
@@ -158,14 +193,15 @@ extension AppStore {
 
     /// Auto-generates the next transfer number scoped to (company, year).
     /// Format: BV-XFR-YYYY-NNNN. Mirrors the Phase 3 number-gen pattern
-    /// (parsed-max+1, soft-delete excluded, multi-tenant scope).
+    /// (parsed-max+1, MONOTONIC across deletes, multi-tenant scope).
     func nextTransferNumber() -> String {
         let prefix = (AppSettings.shared.companyPrefix.isEmpty
                       ? "BV" : AppSettings.shared.companyPrefix)
         let year   = Calendar.current.component(.year, from: Date())
         let yearPrefix = "\(prefix)-XFR-\(year)-"
+        // FIX: monotonic numbering — see nextMaterialRequestNumber.
         let highest = inventoryTransfers
-            .filter { $0.companyID == currentCompanyID && !$0.isDeleted }
+            .filter { $0.companyID == currentCompanyID }
             .compactMap { t -> Int? in
                 guard t.transferNumber.hasPrefix(yearPrefix) else { return nil }
                 return Int(t.transferNumber.dropFirst(yearPrefix.count))

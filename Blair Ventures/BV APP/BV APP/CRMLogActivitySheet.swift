@@ -124,6 +124,7 @@ struct CRMLogActivitySheet: View {
                     }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle(isCall ? "Log Call" : "Log Email")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

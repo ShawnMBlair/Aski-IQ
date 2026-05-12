@@ -128,6 +128,7 @@ struct EmailComposeSheet: View {
                     }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Send Email")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -1139,10 +1139,12 @@ final class SyncEngine: ObservableObject {
                     store.formTemplates[i].syncStatus = .synced
                 }
                 store.formTemplates.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: template.id) }
             } catch {
                 if let i = store.formTemplates.firstIndex(where: { $0.id == template.id }) {
                     store.formTemplates[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: template.id, error: error) }
             }
         }
     }
@@ -1203,10 +1205,12 @@ final class SyncEngine: ObservableObject {
                     store.timesheetEntries[i].syncStatus = .synced
                 }
                 store.timesheetEntries.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: entry.id) }
             } catch {
                 if let i = store.timesheetEntries.firstIndex(where: { $0.id == entry.id }) {
                     store.timesheetEntries[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: entry.id, error: error) }
             }
         }
     }
@@ -1344,10 +1348,12 @@ final class SyncEngine: ObservableObject {
                     store.formSubmissions[i].syncStatus = .synced
                 }
                 store.formSubmissions.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: submission.id) }
             } catch {
                 if let i = store.formSubmissions.firstIndex(where: { $0.id == submission.id }) {
                     store.formSubmissions[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: submission.id, error: error) }
             }
         }
     }
@@ -1455,10 +1461,12 @@ final class SyncEngine: ObservableObject {
                 if let i = store.auditSnapshots.firstIndex(where: { $0.id == snapshot.id }) {
                     store.auditSnapshots[i].syncStatus = .synced
                 }
+                await MainActor.run { store.clearSyncError(id: snapshot.id) }
             } catch {
                 if let i = store.auditSnapshots.firstIndex(where: { $0.id == snapshot.id }) {
                     store.auditSnapshots[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: snapshot.id, error: error) }
             }
         }
     }
@@ -1748,10 +1756,12 @@ final class SyncEngine: ObservableObject {
                         store.exceptionLogs[i].companyID = stamp
                     }
                 }
+                await MainActor.run { store.clearSyncError(id: log.id) }
             } catch {
                 if let i = store.exceptionLogs.firstIndex(where: { $0.id == log.id }) {
                     store.exceptionLogs[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: log.id, error: error) }
             }
         }
     }
@@ -1855,10 +1865,12 @@ final class SyncEngine: ObservableObject {
                     store.projects[i].syncStatus = .synced
                 }
                 store.projects.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: project.id) }
             } catch {
                 if let i = store.projects.firstIndex(where: { $0.id == project.id }) {
                     store.projects[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: project.id, error: error) }
             }
         }
     }
@@ -1929,6 +1941,7 @@ final class SyncEngine: ObservableObject {
                     store.employees[i].syncStatus = .synced
                 }
                 store.employees.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: employee.id) }
             } catch {
                 print("⚠️ pushPendingEmployees failed for \(employee.id): \(error)")
                 CrashReporter.capture(error: error,
@@ -1937,6 +1950,7 @@ final class SyncEngine: ObservableObject {
                 if let i = store.employees.firstIndex(where: { $0.id == employee.id }) {
                     store.employees[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: employee.id, error: error) }
             }
         }
     }
@@ -1987,10 +2001,12 @@ final class SyncEngine: ObservableObject {
                     store.crews[i].syncStatus = .synced
                 }
                 store.crews.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: crew.id) }
             } catch {
                 if let i = store.crews.firstIndex(where: { $0.id == crew.id }) {
                     store.crews[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: crew.id, error: error) }
             }
         }
     }
@@ -2127,10 +2143,12 @@ final class SyncEngine: ObservableObject {
                     store.scheduleEntries[i].syncStatus = .synced
                 }
                 store.scheduleEntries.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: entry.id) }
             } catch {
                 if let i = store.scheduleEntries.firstIndex(where: { $0.id == entry.id }) {
                     store.scheduleEntries[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: entry.id, error: error) }
             }
         }
     }
@@ -2211,10 +2229,12 @@ final class SyncEngine: ObservableObject {
                     .execute()
                 // Drop on success — audit history lives on the server.
                 store.scheduleAuditEvents.removeAll { $0.id == event.id }
+                await MainActor.run { store.clearSyncError(id: event.id) }
             } catch {
                 if let i = store.scheduleAuditEvents.firstIndex(where: { $0.id == event.id }) {
                     store.scheduleAuditEvents[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: event.id, error: error) }
                 print("⚠️ pushPendingScheduleAudits failed: \(error)")
             }
         }
@@ -2442,10 +2462,12 @@ final class SyncEngine: ObservableObject {
                 if let i = store.scheduleRecommendations.firstIndex(where: { $0.id == rec.id }) {
                     store.scheduleRecommendations[i].syncStatus = .synced
                 }
+                await MainActor.run { store.clearSyncError(id: rec.id) }
             } catch {
                 if let i = store.scheduleRecommendations.firstIndex(where: { $0.id == rec.id }) {
                     store.scheduleRecommendations[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: rec.id, error: error) }
                 print("⚠️ pushPendingScheduleRecommendations failed: \(error)")
             }
         }
@@ -2923,10 +2945,12 @@ final class SyncEngine: ObservableObject {
             if let i = store.companyCostCodes.firstIndex(where: { $0.id == code.id }) {
                 store.companyCostCodes[i].syncStatus = .synced
             }
+            await MainActor.run { store.clearSyncError(id: code.id) }
         } catch {
             if let i = store.companyCostCodes.firstIndex(where: { $0.id == code.id }) {
                 store.companyCostCodes[i].syncStatus = .failed
             }
+            await MainActor.run { store.recordSyncError(id: code.id, error: error) }
         }
     }
 

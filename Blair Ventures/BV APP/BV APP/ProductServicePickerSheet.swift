@@ -224,6 +224,7 @@ struct ProductServicePickerSheet: View {
                     .lineLimit(1...3)
             }
         }
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle("Confirm Item")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

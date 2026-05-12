@@ -110,6 +110,7 @@ struct MaterialSaleSendReviewSheet: View {
                     }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Review & Send")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

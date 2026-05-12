@@ -67,7 +67,13 @@ struct MaterialSaleListView: View {
                             .font(.headline)
                         Text("Tap + to create your first sale.")
                             .font(.subheadline).foregroundColor(.secondary)
-                        Button("New Sale") { showCreate = true }
+                        Button("New Sale") {
+                            // Phase 7 / Decision 1: route through
+                            // CommercialIntakeView so Material Sales
+                            // gain the same opportunity + client gate
+                            // already applied to Estimates.
+                            showCreate = true
+                        }
                             .buttonStyle(.borderedProminent)
                         Spacer()
                     }
@@ -100,8 +106,23 @@ struct MaterialSaleListView: View {
                     .disabled(!store.hasCompletedFirstSync)
                 }
             }
+            // Phase 7 / Decision 1: route MaterialSale create through
+            // CommercialIntakeView. This is the same hub the Estimate
+            // create flow uses — it forces a work-type pick (which we
+            // pre-fill to .materialSale here) and then a client
+            // selection before opening MaterialSaleCreateEditView with
+            // a populated CommercialContext. Pre-fix the `+` opened
+            // the create form with no client / opportunity, letting
+            // the user fill out an entire sale before discovering it
+            // wouldn't push.
             .sheet(isPresented: $showCreate) {
-                MaterialSaleCreateEditView()
+                CommercialIntakeView(
+                    prefillContext: CommercialContext(
+                        workType: .materialSale,
+                        source: .intake
+                    )
+                )
+                .environmentObject(store)
             }
         }
     }

@@ -113,6 +113,12 @@ struct ChangeOrder: BaseModel {
     var number: String                      // e.g. "AKI-2026-001-CO-001"
     var title: String
     var projectID: UUID
+    /// CRM linkage. `change_orders.opportunity_id` is NOT NULL on
+    /// prod (set by the auto-link trigger via project_id →
+    /// project.opportunity_id). Pre-fix this field was missing from
+    /// the iOS struct — every push silently failed the NOT NULL
+    /// constraint. Same bug class as MR + PO + Invoice.
+    var opportunityID: UUID? = nil
 
     // Classification
     var type: ChangeOrderType = .ownerInitiated

@@ -370,6 +370,9 @@ struct CertificateCreateEditView: View {
     @State private var expiryDate   = Date()
     @State private var notes        = ""
     @State private var photoItem:   PhotosPickerItem? = nil
+    /// FIX (debug audit): live camera for certificate scans.
+    @State private var showCamera = false
+    @State private var capturedPhoto: UIImage? = nil
     @State private var documentData: Data?           = nil
 
     @State private var showValidation = false
@@ -440,10 +443,27 @@ struct CertificateCreateEditView: View {
 
                 // MARK: Document
                 Section("Certificate Document") {
-                    PhotosPicker(selection: $photoItem, matching: .images) {
-                        Label(documentData == nil ? "Attach Photo / Scan" : "Replace Document",
-                              systemImage: "camera.fill")
-                            .foregroundColor(.blue)
+                    // FIX (debug audit): camera + library, side-by-side.
+                    HStack(spacing: 10) {
+                        if CameraPicker.isAvailable {
+                            Button {
+                                showCamera = true
+                            } label: {
+                                Label("Take Photo", systemImage: "camera.fill")
+                                    .frame(maxWidth: .infinity).padding(.vertical, 10)
+                                    .background(Color.blue)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(8)
+                            }
+                        }
+                        PhotosPicker(selection: $photoItem, matching: .images) {
+                            Label("From Library",
+                                  systemImage: "photo.on.rectangle")
+                                .frame(maxWidth: .infinity).padding(.vertical, 10)
+                                .background(Color(.secondarySystemBackground))
+                                .foregroundColor(.primary)
+                                .cornerRadius(8)
+                        }
                     }
                     .onChange(of: photoItem) { item in
                         Task {
@@ -489,6 +509,17 @@ struct CertificateCreateEditView: View {
                 Text(validationMsg)
             }
             .onAppear { populate() }
+            // FIX (debug audit): live camera sheet for cert scans.
+            .fullScreenCover(isPresented: $showCamera) {
+                CameraPicker(image: $capturedPhoto)
+                    .ignoresSafeArea()
+            }
+            .onChange(of: capturedPhoto) { img in
+                guard let img = img,
+                      let data = img.jpegData(compressionQuality: 0.9) else { return }
+                documentData = data
+                capturedPhoto = nil
+            }
         }
     }
 

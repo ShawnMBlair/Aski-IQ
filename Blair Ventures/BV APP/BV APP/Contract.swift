@@ -192,6 +192,12 @@ struct Contract: BaseModel {
 
     // Linkage
     var projectID: UUID?
+    /// CRM linkage. `contracts.opportunity_id` is NOT NULL on prod
+    /// (set by the auto-link trigger via project_id or quote_id).
+    /// Pre-fix this field was missing from the iOS struct — every
+    /// push silently failed the NOT NULL constraint. Same bug
+    /// class as MR + PO + Invoice + ChangeOrder.
+    var opportunityID: UUID? = nil
     /// For child SOWs sitting under an MSA — points at the parent MSA.
     var parentContractID: UUID?
     /// Optional link back to the quote that became this contract

@@ -98,8 +98,17 @@ enum POStatus: String, Codable, CaseIterable {
         }
     }
 
+    /// FIX (BV-MR-2026-0001 follow-up): .draft must be in the open set.
+    /// Pre-fix this set was `[.sent, .confirmed, .partial]`, so newly-
+    /// drafted POs flagged `isLocked = !status.isOpen = true` and the
+    /// entire `POCreateEditView` form rendered as disabled. Users
+    /// reported "the area is locked and you cant make entry" on the
+    /// Create PO Manually sheet. Adding .draft brings POStatus into
+    /// alignment with MaterialRequestStatus (which already treats
+    /// drafts as open) and matches the lock-on-terminal-state intent
+    /// — only received / closed / cancelled should lock the form.
     var isOpen: Bool {
-        [.sent, .confirmed, .partial].contains(self)
+        [.draft, .sent, .confirmed, .partial].contains(self)
     }
 }
 
@@ -194,6 +203,15 @@ struct MaterialRequest: Identifiable, Codable, Equatable {
 
     // Procurement target
     var supplierID:      UUID? = nil
+
+    /// CRM linkage. `material_requests.opportunity_id` is NOT NULL on
+    /// prod (set by the auto-link trigger via project_id or
+    /// material_sales_id when supplied; back-filled from
+    /// project.opportunity_id for internal/legacy rows). Pre-fix this
+    /// field was missing from the iOS struct, so any downstream
+    /// derivation (e.g., propagating onto a PO via `newPOFromRequest`)
+    /// had nothing to copy and the PO push silently failed.
+    var opportunityID:   UUID? = nil
 
     // Content
     var lineItems:       [MaterialLineItem] = []
@@ -319,6 +337,14 @@ struct PurchaseOrder: Identifiable, Codable, Equatable {
     var projectID:     UUID?
     var supplierID:    UUID?
     var supplierName:  String = ""
+
+    /// CRM linkage. Pre-fix this field was missing from the iOS struct,
+    /// so PO pushes omitted `opportunity_id` from the JSON payload —
+    /// which Postgrest substituted as NULL, hitting the NOT NULL
+    /// constraint on `purchase_orders.opportunity_id` and silently
+    /// failing every push. Mirrors the same field on MaterialRequest
+    /// and is propagated from the source MR via `newPOFromRequest()`.
+    var opportunityID: UUID? = nil
 
     // Dates
     var issueDate:     Date   = Date()
@@ -675,6 +701,129 @@ extension AppStore {
         return true
     }
 
+    /// Cancel a material request from any non-terminal state.
+    /// Captures a free-text reason on `approvalNote` so the audit
+    /// trail surfaces why the cancellation happened. Terminal states
+    /// (.cancelled, .closed, .rejected, .delivered) are rejected with
+    /// a clear error — once a request is in those, cancellation is a
+    /// no-op (delivered work can't be "cancelled," it can only be
+    /// .closed).
+    func cancelMaterialRequest(_ request: MaterialRequest, reason: String) {
+        // Allow the requester to cancel their own draft. Other states
+        // require an approver-tier role since they affect downstream
+        // pipeline visibility (approvers tracking commitments,
+        // accounting watching open POs, etc).
+        let isOwnDraft = request.status == .draft
+            && request.requestedByID == currentUser?.id
+        if !isOwnDraft {
+            guard requireRole([.projectManager, .officeAdmin, .manager, .executive],
+                              action: "cancel_material_request") else { return }
+        }
+        guard let idx = materialRequests.firstIndex(where: { $0.id == request.id }) else { return }
+        // Terminal-state guard. Cancelling a delivered MR would
+        // corrupt the cost roll-up; cancelling an already-cancelled
+        // / rejected / closed one is a no-op the UI shouldn't even
+        // surface.
+        switch request.status {
+        case .cancelled, .closed, .rejected, .delivered:
+            ToastService.shared.warning("This request is already in a terminal state.")
+            return
+        default:
+            break
+        }
+
+        var updated = request
+        updated.status        = .cancelled
+        updated.approvalNote  = reason
+        updated.updatedAt     = Date()
+        updated.syncStatus    = .pending
+        objectWillChange.send()
+        materialRequests[idx] = updated
+        Task { await SyncEngine.shared.pushPendingMaterialRequests() }
+        ToastService.shared.success("Request \(request.requestNumber) cancelled.")
+    }
+
+    /// Close a delivered material request — moves it into the archive
+    /// state. Anything still .partial or .ordered should be moved to
+    /// .delivered via the normal receive flow first; closing those
+    /// directly would orphan their pending line items. .delivered is
+    /// the only valid source state.
+    func closeMaterialRequest(_ request: MaterialRequest) {
+        guard requireRole([.projectManager, .officeAdmin, .manager, .executive],
+                          action: "close_material_request") else { return }
+        guard let idx = materialRequests.firstIndex(where: { $0.id == request.id }) else { return }
+        guard request.status == .delivered else {
+            ToastService.shared.warning(
+                "Only delivered requests can be closed. Receive the items first."
+            )
+            return
+        }
+
+        var updated = request
+        updated.status     = .closed
+        updated.closedAt   = Date()
+        updated.updatedAt  = Date()
+        updated.syncStatus = .pending
+        objectWillChange.send()
+        materialRequests[idx] = updated
+        Task { await SyncEngine.shared.pushPendingMaterialRequests() }
+        ToastService.shared.success("Request \(request.requestNumber) closed.")
+    }
+
+    /// Cancel a Purchase Order from any non-terminal state. Mirrors
+    /// the MR cancellation flow. Captures a reason on `notes` so the
+    /// supplier-facing PDF + audit trail surface why the PO was killed.
+    func cancelPurchaseOrder(_ po: PurchaseOrder, reason: String) {
+        guard requireRole([.projectManager, .officeAdmin, .manager, .executive],
+                          action: "cancel_purchase_order") else { return }
+        guard let idx = purchaseOrders.firstIndex(where: { $0.id == po.id }) else { return }
+        switch po.status {
+        case .cancelled, .closed, .received:
+            ToastService.shared.warning("This PO is already in a terminal state.")
+            return
+        default:
+            break
+        }
+
+        var updated = po
+        updated.status     = .cancelled
+        // Append the reason as a notes prefix so the original supplier
+        // notes (delivery instructions, etc.) aren't clobbered.
+        let cancelLine = "CANCELLED: \(reason)"
+        updated.notes = updated.notes.isEmpty ? cancelLine : "\(cancelLine)\n\n\(updated.notes)"
+        updated.updatedAt  = Date()
+        updated.syncStatus = .pending
+        objectWillChange.send()
+        purchaseOrders[idx] = updated
+        Task { await SyncEngine.shared.pushPendingPurchaseOrders() }
+        ToastService.shared.success("PO \(po.poNumber) cancelled.")
+    }
+
+    /// Close a received Purchase Order — moves it from .received to
+    /// .closed (archive state). Used after invoice matching is done
+    /// and all financial commitments are settled. Anything not yet
+    /// fully received should be received first via the standard flow.
+    func closePurchaseOrder(_ po: PurchaseOrder) {
+        guard requireRole([.projectManager, .officeAdmin, .manager, .executive],
+                          action: "close_purchase_order") else { return }
+        guard let idx = purchaseOrders.firstIndex(where: { $0.id == po.id }) else { return }
+        guard po.status == .received else {
+            ToastService.shared.warning(
+                "Only received POs can be closed. Receive all items first."
+            )
+            return
+        }
+
+        var updated = po
+        updated.status     = .closed
+        updated.updatedAt  = Date()
+        updated.syncStatus = .pending
+        objectWillChange.send()
+        purchaseOrders[idx] = updated
+        Task { await SyncEngine.shared.pushPendingPurchaseOrders() }
+        ToastService.shared.success("PO \(po.poNumber) closed.")
+    }
+
     // MARK: Material Request Queries
 
     func materialRequests(for projectID: UUID) -> [MaterialRequest] {
@@ -912,8 +1061,19 @@ extension AppStore {
         let prefix = AppSettings.shared.companyPrefix.isEmpty ? "BV" : AppSettings.shared.companyPrefix
         let year   = Calendar.current.component(.year, from: Date())
         let yearPrefix = "\(prefix)-MR-\(year)-"
+        // FIX (BV-MR-2026-0001 follow-up): monotonic numbering across
+        // deletes. Pre-fix the filter `!$0.isDeleted` excluded
+        // soft-deleted rows from the max, so deleting an MR would
+        // free up its number — the next save would silently re-use
+        // it. Users saw "every new request starts with BV-MR-2026-0001"
+        // because they'd delete and re-create. Now we walk EVERY row
+        // (tenant + year scoped) so the high-water mark is durable
+        // across deletes. The partial UNIQUE index on
+        // (company_id, request_number) WHERE is_deleted=false still
+        // accepts the new number — it just won't collide because we
+        // always emit one above the historical max.
         let highest = materialRequests
-            .filter { $0.companyID == currentCompanyID && !$0.isDeleted }
+            .filter { $0.companyID == currentCompanyID }
             .compactMap { mr -> Int? in
                 guard mr.requestNumber.hasPrefix(yearPrefix) else { return nil }
                 return Int(mr.requestNumber.dropFirst(yearPrefix.count))
@@ -1275,6 +1435,11 @@ extension AppStore {
         po.materialRequestID  = mr.id
         po.lineItems          = mr.lineItems
         po.requiredDate       = mr.requiredByDate
+        // FIX (BV-MR-2026-0001): propagate opportunity linkage so the
+        // auto-draft path also satisfies purchase_orders.opportunity_id
+        // (NOT NULL on prod). Pre-fix this path didn't carry the
+        // opportunity over, so even auto-drafted POs failed to push.
+        po.opportunityID      = mr.opportunityID
         // Pull delivery address from the project's site address when linked,
         // otherwise fall back to the MR's site location field.
         po.deliveryAddress = (mr.projectID
@@ -1312,8 +1477,9 @@ extension AppStore {
         let prefix = AppSettings.shared.companyPrefix.isEmpty ? "BV" : AppSettings.shared.companyPrefix
         let year   = Calendar.current.component(.year, from: Date())
         let yearPrefix = "\(prefix)-PO-\(year)-"
+        // FIX: monotonic numbering — see nextMaterialRequestNumber.
         let highest = purchaseOrders
-            .filter { $0.companyID == currentCompanyID && !$0.isDeleted }
+            .filter { $0.companyID == currentCompanyID }
             .compactMap { po -> Int? in
                 guard po.poNumber.hasPrefix(yearPrefix) else { return nil }
                 return Int(po.poNumber.dropFirst(yearPrefix.count))

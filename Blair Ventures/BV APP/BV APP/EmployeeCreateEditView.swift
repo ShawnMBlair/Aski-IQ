@@ -112,6 +112,7 @@ struct EmployeeCreateEditView: View {
                     }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle(isEditing ? "Edit Employee" : "New Employee")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

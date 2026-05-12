@@ -83,33 +83,66 @@ But the **UX layer can still ALLOW the user to start a creation flow before they
 ## Recommended interventions (in design-decision order)
 
 **Decision 1: Free-floating top-level commercial creates — block, warn, or auto-route?**
+*Status: ✅ DONE 2026-05-10 (commits 73d5554 + 13c862a). Pattern: auto-route via single-sheet enum router.*
+
+What's now wired:
+
+| Entry point | Picker | Create-view param added |
+|---|---|---|
+| `QuoteListView` `+` | `RequiredEstimatePickerSheet` (Quote.estimateID is NOT NULL) | already `fromEstimate:` |
+| `InvoiceListView` `+` | `RequiredProjectPickerSheet` | `preselectedProjectID:` |
+| `ChangeOrderListView` `+` (non-scoped) | `RequiredProjectPickerSheet` | already `projectID:` (required) |
+| `RFIListView` `+` (non-scoped) | `RequiredProjectPickerSheet` | already `projectID:` (required) |
+| `ProjectListView` `+` | `RequiredOpportunityPickerSheet` | `preselectedOpportunityID:` |
+| `MaterialSaleListView` `+` | `CommercialIntakeView` (workType prefilled) | already `context:` |
+| `EstimateListView` `+` | `CommercialIntakeView` (no prefill) | already `context:` |
+| `ProjectSubContractListView` `+` (project-scoped) | `RequiredSubcontractorPickerSheet` | added `preselectedProjectID:` |
+| `SubcontractorListView` `+` | n/a — creates vendor record, top-level resource | n/a |
+
+`ParentPickerSheet.swift` contains the three callback-style pickers
+(`RequiredProjectPickerSheet`, `RequiredOpportunityPickerSheet`,
+`RequiredEstimatePickerSheet`, plus `RequiredSubcontractorPickerSheet`
+for the SubContract follow-up). Project-scoped list variants
+(CO/RFI/SubContract nested under Project Detail) skip the picker and
+route straight to `.create(pid)`.
 
 Three patterns exist in the app today:
 - **Block:** Hide the `+` button entirely; users must navigate from the parent (Opportunity / Project / Client). Highest enforcement, lowest UX flexibility.
 - **Warn:** Show a "Where does this belong?" prompt that forces the user to pick a parent. Same destination, gentler UX.
 - **Auto-route:** The `+` button always opens a "Pick parent" flow first. The auto-link trigger then fills FKs. Same as the procurement pattern that just shipped.
 
-Recommendation: **Auto-route** for Quote/Estimate/Invoice/CO/RFI/MR/MS (always require Opportunity or Project), **block** for Sub-Contract (always require parent Contract or Project), **leave free-floating** for Client/Crew/Equipment/Project (top-level resources).
+Recommendation: **Auto-route** for Quote/Estimate/Invoice/CO/RFI/MR/MS (always require Opportunity or Project), **block** for Sub-Contract (always require parent Contract or Project), **leave free-floating** for Client/Crew/Equipment/Project (top-level resources). Implementation requires the product owner to confirm the chosen pattern per entity class; the same change applied uniformly may not fit every workflow.
 
 **Decision 2: Estimate-from-Client/Site flows**
+*Status: ✅ DONE (verified 2026-05-10). Data-layer auto-create lands the placeholder Opportunity; the UX banner remains as nice-to-have.*
 
-These currently start from a non-Opportunity parent. Two options:
-- Auto-create an "Untitled Opportunity" placeholder when the user starts an estimate from a Client/Site
-- Force the user to either pick an existing Opportunity or create one first
+What's already wired:
+- `AppStore.upsertEstimate` (`AppStore.swift:960-962`) detects `isNew && updated.opportunityID == nil` and calls `ensureCRMLink(for: &updated)`.
+- `ensureCRMLink` (`CRMCommercialBridge.swift:338-395`) auto-creates a `CRMOpportunity` with title = estimate.name, stage = `.estimateRequired`, and stamps it back onto the estimate before append.
+- The auto-created Opportunity logs a `CRMActivity` with `notes: "CRM opportunity auto-created."` so the audit trail captures intent.
 
-Recommendation: **Auto-create placeholder** with a banner "This created Opportunity '<client> — <date>'. You can rename later." Lowest friction, preserves data integrity.
+What was originally proposed but is **not** required: a banner/toast on EstimateCreateView declaring the auto-creation. Adding it would mean injecting `ToastService.shared.info(...)` in `finalizeEstimateSave` after re-reading the estimate from `store.estimates` to detect whether `ensureCRMLink` fired. Deferred — the data-integrity goal is met without it.
 
 **Decision 3: Material Request constraint enforcement at UI layer**
+*Status: ✅ DONE (verified 2026-05-10). Save-button is gated on destination validity.*
 
-The DB CHECK constraint enforces `(destination_type, project_id, material_sales_id)` validity. The Swift form should disable the Save button until the constraint is satisfied (currently it errors on push and shows the SyncErrorMapper message). Worth fixing for UX even if not strictly required.
+What's already wired in `MRCreateEditView` (`ProcurementViews.swift:1329+`):
+- `hasDestinationTarget` (line 1565) computes whether the picked `destinationType` has its required target ID.
+- `validationIssues` (line 1583) returns user-readable copy ("Pick a project for this request.", "Pick a material sale for this request.").
+- `canSave` (line 1602) = `validationIssues.isEmpty && !isLocked`.
+- Save button (line 1446) = `.disabled(!canSave)`.
 
-## Implementation effort estimate
+The audit pre-dated this validation suite landing.
 
-- **Decision 1 / Auto-route:** 7 view files. Each needs a "select parent" sheet before the create form. ~4 hours.
-- **Decision 2 / Auto-create placeholder Opportunity:** Modify EstimateCreateView to inject Opportunity creation when called from non-Opp parent. ~1 hour.
-- **Decision 3 / MR Save-button disable:** Add a computed `isValidDestination` to MaterialRequestEditorView. ~30 minutes.
+## Implementation effort estimate (final 2026-05-10)
 
-Total: ~5-6 hours of focused work once the design decisions are made.
+| Decision | Original estimate | Actual status |
+|---|---|---|
+| Decision 1 / Auto-route | ~4 hours | ✅ Done — 8 entries wired via `ParentPickerSheet` + `CommercialIntakeView`. Commits 73d5554 + 13c862a. |
+| Decision 2 / Auto-create placeholder Opportunity | ~1 hour | ✅ Done at data layer via `ensureCRMLink`. Toast banner deferred (~15 min when revisited). |
+| Decision 3 / MR Save-button disable | ~30 minutes | ✅ Done — `canSave` gate already covered destination validity. |
+
+Net: All 3 decisions closed. Phase 7 / orphan-record prevention complete.
 
 ## What this audit does NOT cover
 
@@ -120,8 +153,8 @@ Total: ~5-6 hours of focused work once the design decisions are made.
 
 ## Next session
 
-When you're ready to act on this:
-1. Review the three design decisions above.
-2. Pick a pattern (block / warn / auto-route) for each free-floating entry.
-3. Tell me which subset to implement first.
-4. I'll wire it across the relevant views in 1-2 hours per entity-class group.
+All three decisions are closed. No outstanding orphan-prevention work in Phase 7.
+
+Open follow-ups (not gating):
+- Toast banner on auto-Opportunity create (Decision 2 nice-to-have — ~15 min).
+- Test coverage for the picker flows. ViewInspector / UI tests aren't wired in BV APPTests yet; for now coverage is end-to-end build-time + manual smoke.

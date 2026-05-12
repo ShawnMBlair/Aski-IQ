@@ -69,6 +69,8 @@ extension SyncEngine {
         do {
             struct Row: Codable {
                 let id, number, title, project_id, type, status: String
+                /// FIX (debug audit): decode CRM linkage.
+                let opportunity_id: String?
                 let description: String?
                 let reason, notes: String?
                 let cost_impact: Double
@@ -102,6 +104,7 @@ extension SyncEngine {
                 var co = ChangeOrder(number: row.number, title: row.title, projectID: projID)
                 co.id                    = uuid
                 co.companyID             = row.company_id.flatMap(UUID.init(uuidString:))
+                co.opportunityID         = row.opportunity_id.flatMap { UUID(uuidString: $0) }
                 co.type                  = ChangeOrderType(rawValue: row.type)     ?? .other
                 co.status                = ChangeOrderStatus(rawValue: row.status) ?? .draft
                 co.description           = row.description ?? ""
@@ -140,6 +143,12 @@ extension SyncEngine {
             do {
                 struct Row: Codable {
                     let id, company_id, number, title, project_id, type, status: String
+                    /// FIX (debug audit): persist CRM linkage.
+                    /// change_orders.opportunity_id is NOT NULL on prod;
+                    /// pre-fix the Row struct omitted the field, so
+                    /// every CO push silently failed and never landed
+                    /// on the server.
+                    let opportunity_id: String?
                     let description, reason, notes: String?
                     let cost_impact: Double
                     let schedule_impact_days: Int
@@ -165,6 +174,7 @@ extension SyncEngine {
                     project_id:              co.projectID.uuidString,
                     type:                    co.type.rawValue,
                     status:                  co.status.rawValue,
+                    opportunity_id:          co.opportunityID?.uuidString,
                     description:             co.description.isEmpty ? nil : co.description,
                     reason:                  co.reason,
                     notes:                   co.notes,
@@ -397,10 +407,12 @@ extension SyncEngine {
                 if let i = store.projectBudgets.firstIndex(where: { $0.id == bud.id }) {
                     store.projectBudgets[i].syncStatus = .synced
                 }
+                await MainActor.run { store.clearSyncError(id: bud.id) }
             } catch {
                 if let i = store.projectBudgets.firstIndex(where: { $0.id == bud.id }) {
                     store.projectBudgets[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: bud.id, error: error) }
             }
         }
         store.saveBudgets()
@@ -509,10 +521,12 @@ extension SyncEngine {
                 if let i = store.subcontractors.firstIndex(where: { $0.id == sub.id }) {
                     store.subcontractors[i].syncStatus = .synced
                 }
+                await MainActor.run { store.clearSyncError(id: sub.id) }
             } catch {
                 if let i = store.subcontractors.firstIndex(where: { $0.id == sub.id }) {
                     store.subcontractors[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: sub.id, error: error) }
             }
         }
         store.saveSubcontractors()
@@ -642,6 +656,9 @@ extension SyncEngine {
             struct Row: Codable {
                 let id, invoice_number, status: String
                 let project_id, client_id: String?
+                /// FIX (debug audit): decode CRM linkage so the next
+                /// edit pushes it back correctly.
+                let opportunity_id: String?
                 let bill_to_name, bill_to_address: String?
                 let tax_rate: Double
                 let invoice_date, due_date: String?
@@ -682,6 +699,7 @@ extension SyncEngine {
                 inv.companyID    = row.company_id.flatMap(UUID.init(uuidString:))
                 inv.status       = InvoiceStatus(rawValue: row.status) ?? .draft
                 inv.clientID     = row.client_id.flatMap { UUID(uuidString: $0) }
+                inv.opportunityID = row.opportunity_id.flatMap { UUID(uuidString: $0) }
                 inv.billToName   = row.bill_to_name    ?? ""
                 inv.billToAddress = row.bill_to_address ?? ""
                 inv.taxRate      = fromDouble(row.tax_rate)
@@ -719,6 +737,13 @@ extension SyncEngine {
                 struct Row: Codable {
                     let id, company_id, invoice_number, status: String
                     let project_id, client_id: String?
+                    /// FIX (debug audit follow-up): persist CRM linkage.
+                    /// `invoices.opportunity_id` is NOT NULL on prod;
+                    /// pre-fix the Row struct omitted the field, so every
+                    /// invoice push silently failed the NOT NULL
+                    /// constraint and the row never landed on the server.
+                    /// Same bug class as MR + PO had before commit af8a23b.
+                    let opportunity_id: String?
                     let bill_to_name, bill_to_address: String?
                     let tax_rate: Double
                     let invoice_date, due_date: String?
@@ -743,6 +768,7 @@ extension SyncEngine {
                     status:           inv.status.rawValue,
                     project_id:       inv.projectID?.uuidString,
                     client_id:        inv.clientID?.uuidString,
+                    opportunity_id:   inv.opportunityID?.uuidString,
                     bill_to_name:     inv.billToName.isEmpty    ? nil : inv.billToName,
                     bill_to_address:  inv.billToAddress.isEmpty ? nil : inv.billToAddress,
                     tax_rate:         toDouble(inv.taxRate),
@@ -1083,6 +1109,12 @@ extension SyncEngine {
             struct Row: Codable {
                 let id, request_number, status: String
                 let project_id, supplier_id, material_sales_id, requested_by_employee_id: String?
+                /// FIX (BV-MR-2026-0001): persist CRM linkage. The
+                /// auto-link trigger fills this server-side; pre-fix
+                /// the iOS pull dropped it, so the next
+                /// `newPOFromRequest` had a nil opportunity to copy
+                /// onto the PO → PO push failed NOT NULL.
+                let opportunity_id: String?
                 let destination_type: String?
                 let requested_by_name, requested_by_email: String?
                 let request_date, required_by_date: String?
@@ -1121,6 +1153,7 @@ extension SyncEngine {
                     .flatMap { MaterialRequestDestinationType(rawValue: $0) } ?? .internalUse
                 mr.materialSaleID   = row.material_sales_id.flatMap { UUID(uuidString: $0) }
                 mr.supplierID       = row.supplier_id.flatMap { UUID(uuidString: $0) }
+                mr.opportunityID    = row.opportunity_id.flatMap { UUID(uuidString: $0) }
                 mr.requestedByID    = row.requested_by_employee_id.flatMap { UUID(uuidString: $0) }
                 mr.requestedByName  = row.requested_by_name ?? ""
                 mr.requestedByEmail = row.requested_by_email
@@ -1264,6 +1297,10 @@ extension SyncEngine {
                 let id, po_number, status: String
                 let project_id, supplier_id: String?
                 let supplier_name: String?
+                /// Same fix as the push side — pull was also dropping
+                /// opportunity_id, so even POs that survived push lost
+                /// their CRM linkage on every device sync.
+                let opportunity_id: String?
                 let issue_date, required_date, received_date: String?
                 let delivery_address, terms, notes: String?
                 let tax_rate: Double
@@ -1297,6 +1334,7 @@ extension SyncEngine {
                 po.status          = POStatus(rawValue: row.status) ?? .draft
                 po.supplierID      = row.supplier_id.flatMap { UUID(uuidString: $0) }
                 po.supplierName    = row.supplier_name   ?? ""
+                po.opportunityID   = row.opportunity_id.flatMap { UUID(uuidString: $0) }
                 po.issueDate       = parseDate(row.issue_date) ?? Date()
                 po.requiredDate    = parseDate(row.required_date)
                 po.receivedDate    = parseDate(row.received_date)
@@ -1335,6 +1373,13 @@ extension SyncEngine {
                 struct Row: Codable {
                     let id, company_id, po_number, status: String
                     let project_id, supplier_id, supplier_name: String?
+                    /// FIX (BV-MR-2026-0001 follow-up): persist
+                    /// opportunity linkage. `purchase_orders.opportunity_id`
+                    /// is NOT NULL on prod; the pre-fix Row struct omitted
+                    /// the field entirely, so every push silently failed
+                    /// with a 23502 constraint violation and the
+                    /// resulting PO never landed on the server.
+                    let opportunity_id: String?
                     let issue_date, required_date, received_date: String?
                     let delivery_address, terms, notes: String?
                     let tax_rate: Double
@@ -1358,6 +1403,7 @@ extension SyncEngine {
                     project_id:       po.projectID?.uuidString,
                     supplier_id:      po.supplierID?.uuidString,
                     supplier_name:    po.supplierName.isEmpty ? nil : po.supplierName,
+                    opportunity_id:   po.opportunityID?.uuidString,
                     issue_date:       isoDateFmt.string(from: po.issueDate),
                     required_date:    po.requiredDate.map  { isoDateFmt.string(from: $0) },
                     received_date:    po.receivedDate.map  { isoDateFmt.string(from: $0) },
@@ -1487,10 +1533,12 @@ extension SyncEngine {
                 if let i = store.productServices.firstIndex(where: { $0.id == ps.id }) {
                     store.productServices[i].syncStatus = .synced
                 }
+                await MainActor.run { store.clearSyncError(id: ps.id) }
             } catch {
                 if let i = store.productServices.firstIndex(where: { $0.id == ps.id }) {
                     store.productServices[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: ps.id, error: error) }
             }
         }
     }
@@ -1561,10 +1609,12 @@ extension SyncEngine {
                 if let i = store.clientPricings.firstIndex(where: { $0.id == cp.id }) {
                     store.clientPricings[i].syncStatus = .synced
                 }
+                await MainActor.run { store.clearSyncError(id: cp.id) }
             } catch {
                 if let i = store.clientPricings.firstIndex(where: { $0.id == cp.id }) {
                     store.clientPricings[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: cp.id, error: error) }
             }
         }
     }
@@ -1654,6 +1704,7 @@ extension SyncEngine {
                 var updated = client; updated.syncStatus = .synced
                 store.upsertClientSynced(updated)
                 store.clients.removeAll { $0.isDeleted && $0.syncStatus == .synced }
+                await MainActor.run { store.clearSyncError(id: client.id) }
             } catch {
                 // No more silent swallow — surface the actual error so
                 // the user sees what RLS / column mismatch / network
@@ -1668,6 +1719,7 @@ extension SyncEngine {
                 ])
                 var updated = client; updated.syncStatus = .failed
                 store.upsertClientSynced(updated)
+                await MainActor.run { store.recordSyncError(id: client.id, error: error) }
             }
         }
     }
@@ -1872,6 +1924,7 @@ extension SyncEngine {
                 if let i = store.estimates.firstIndex(where: { $0.id == est.id }) {
                     store.estimates[i].syncStatus = .synced
                 }
+                await MainActor.run { store.clearSyncError(id: est.id) }
             } catch {
                 // 2026-04 audit: this catch was silent, which is why
                 // "estimates not syncing" was hard to diagnose. Log
@@ -1887,6 +1940,7 @@ extension SyncEngine {
                 if let i = store.estimates.firstIndex(where: { $0.id == est.id }) {
                     store.estimates[i].syncStatus = .failed
                 }
+                await MainActor.run { store.recordSyncError(id: est.id, error: error) }
             }
         }
         store.objectWillChange.send()

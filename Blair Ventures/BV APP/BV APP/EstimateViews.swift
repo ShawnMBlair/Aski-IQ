@@ -1719,6 +1719,20 @@ struct EstimateCreateView: View {
     /// Extracted from save() so the conflict alert path can call it
     /// after the user confirms "Overwrite with my changes".
     private func finalizeEstimateSave(_ estimate: Estimate, clientID: UUID) {
+        // Phase 7 / Decision 2 UX polish: detect when the auto-create
+        // path will fire so we can surface a toast naming the new
+        // Opportunity. Two paths converge on a brand-new estimate that
+        // had no opportunity at save time:
+        //   1. `upsertEstimate` calls `ensureCRMLink` (AppStore:960)
+        //   2. The `context.opportunityID == nil` branch below calls
+        //      `createOpportunityFromContext`
+        // Either way, the stored estimate's opportunityID flips from
+        // nil → set during this method. We capture the "before" state
+        // here and read the "after" via the store post-save.
+        let willAutoCreateOpp = (existing == nil)
+            && (estimate.opportunityID == nil)
+            && (context?.opportunityID == nil)
+
         store.upsertEstimate(estimate)
         onCreated?(estimate)
 
@@ -1728,6 +1742,20 @@ struct EstimateCreateView: View {
             ctx.estimateID = estimate.id
             if ctx.workType == nil { ctx.workType = .projectWork }
             store.createOpportunityFromContext(&ctx)
+        }
+
+        // Surface a toast naming the auto-created Opportunity so the
+        // user knows the linkage happened and where to rename it.
+        // Pre-fix the auto-create was silent except for a CRMActivity
+        // feed entry — the audit (Decision 2) called this out as a
+        // missing piece even though the data-layer side was wired.
+        if willAutoCreateOpp,
+           let stored = store.estimates.first(where: { $0.id == estimate.id }),
+           let oppID  = stored.opportunityID,
+           let opp    = store.crmOpportunities.first(where: { $0.id == oppID }) {
+            ToastService.shared.info(
+                "Opportunity “\(opp.title)” auto-created — rename anytime from CRM."
+            )
         }
 
         dismiss()

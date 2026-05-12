@@ -361,6 +361,10 @@ struct SettingsView: View {
     @State private var companyNameDraft      = ""
     @State private var isSavingCompanyName   = false
     @State private var companyNameError: String? = nil
+    /// Phase 8 / Multi-Company / Track 3 — controls the company
+    /// switcher sheet presentation. Sheet itself lives in
+    /// MultiCompany.swift and reads `store.companyMemberships`.
+    @State private var showCompanySwitcher    = false
     // Settings save (toolbar button)
     @State private var isSavingSettings      = false
     @State private var settingsSaveError: String? = nil
@@ -386,6 +390,14 @@ struct SettingsView: View {
     // MARK: - Integrations state
     @ObservedObject private var qbo = QBOService.shared
     @State private var showQBOConnect = false
+
+    /// FIX (Mac Catalyst): the settings sheet had no Done/close
+    /// button, only a Save button. On iOS a sheet can be dismissed
+    /// by swiping down; on Catalyst there's no such gesture and the
+    /// title bar has no close affordance — the user was stuck inside
+    /// the sheet after saving. Adding the standard iOS "Done" button
+    /// to the leading toolbar slot fixes both platforms cleanly.
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
@@ -891,6 +903,16 @@ struct SettingsView: View {
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
+                        // Phase 8 / Multi-Company / Track 3 — surface the
+                        // company switcher. Single-membership users still
+                        // see the row (confirms which tenant they're in);
+                        // the sheet's footer explains that switching
+                        // unlocks once multiple memberships exist.
+                        Button {
+                            showCompanySwitcher = true
+                        } label: {
+                            Label("Switch Company", systemImage: "rectangle.2.swap")
+                        }
                     }
                 }
 
@@ -978,6 +1000,14 @@ struct SettingsView: View {
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.large)
             .toolbar {
+                // FIX (Mac Catalyst): leading Done button so the user
+                // can close the settings sheet after saving. Pre-fix
+                // there was no close affordance and the Mac had no
+                // swipe-down gesture to dismiss — users were stuck on
+                // settings after tapping Save.
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("Done") { dismiss() }
+                }
                 // Explicit Save button — only enabled when the user has
                 // unsaved changes. This is the canonical way to push
                 // settings to Supabase; never relies on didSet writes.
@@ -1034,6 +1064,11 @@ struct SettingsView: View {
             }
             .sheet(isPresented: $showInviteSheet) {
                 InviteCodeGeneratorView()
+            }
+            // Phase 8 / Multi-Company / Track 3 — switcher.
+            .sheet(isPresented: $showCompanySwitcher) {
+                CompanySwitcherSheet()
+                    .environmentObject(store)
             }
             .sheet(isPresented: $showImportSheet) {
                 MultiTabImportView()
@@ -1161,12 +1196,21 @@ struct SettingsView: View {
     /// Push the in-memory settings cache to Supabase. Called by the
     /// toolbar Save button. Surfaces failures via an alert so the user
     /// knows whether the values they typed actually persisted.
+    ///
+    /// FIX (Mac Catalyst follow-up): on successful save, also dismiss
+    /// the sheet + show a confirmation toast. Pre-fix the button
+    /// just disabled itself with no visible feedback and the user
+    /// was stuck on settings wondering whether anything happened.
+    /// The user reported this directly: "When I saved in settings on
+    /// macbook it wont close and move past."
     private func saveSettings() async {
         guard !isSavingSettings else { return }
         isSavingSettings = true
         defer { isSavingSettings = false }
         do {
             try await settings.save()
+            ToastService.shared.success("Settings saved.")
+            dismiss()
         } catch {
             settingsSaveError = error.localizedDescription
         }

@@ -75,8 +75,9 @@ extension AppStore {
     func nextContractNumber() -> String {
         let year = Calendar.current.component(.year, from: Date())
         let prefix = "C-\(year)-"
+        // FIX: monotonic numbering — see nextMaterialRequestNumber.
         let used = contracts
-            .filter { $0.companyID == currentCompanyID && !$0.isDeleted }
+            .filter { $0.companyID == currentCompanyID }
             .compactMap { c -> Int? in
                 guard let n = c.contractNumber, n.hasPrefix(prefix) else { return nil }
                 return Int(n.dropFirst(prefix.count))

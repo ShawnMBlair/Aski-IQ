@@ -139,6 +139,7 @@ struct ProjectInvoiceGeneratorSheet: View {
 
                 resultSection
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Generate Invoice")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

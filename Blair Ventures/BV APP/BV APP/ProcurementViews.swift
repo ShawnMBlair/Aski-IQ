@@ -652,6 +652,13 @@ struct MRDetailView: View {
     @State private var local: MaterialRequest
     @State private var showEdit = false
     @State private var showCreatePO = false
+    /// FIX (BV-MR-2026-0001): "Add Supplier" must open the actual
+    /// SupplierCreateEditView, not the MR editor. Pre-fix the button
+    /// routed to `showEdit = true` which opened the MR editor — the
+    /// user reported "there is no way to add a supplier" because the
+    /// MR editor's Supplier picker shows existing suppliers but
+    /// doesn't expose a "create new" path.
+    @State private var showCreateSupplier = false
     @State private var showDeleteAlert = false
     @State private var showReceiveSheet = false
     @State private var showDuplicateAlert = false
@@ -661,19 +668,34 @@ struct MRDetailView: View {
     @State private var rejectReasonSheetMode: RejectionMode? = nil
     @State private var rejectReasonText: String = ""
 
-    /// Differentiates the two reason-capture flows on the same sheet —
-    /// outright rejection (terminal) vs. send-back-for-changes (returns
-    /// to draft). The sheet's title + button copy adapt accordingly.
+    /// Differentiates the reason-capture flows that share the same
+    /// sheet: outright rejection (terminal, .submitted → .rejected),
+    /// send-back-for-changes (.submitted → .draft), and full
+    /// cancellation (any non-terminal → .cancelled). The sheet's
+    /// title + button copy adapt accordingly.
     enum RejectionMode: Identifiable {
         case reject
         case requestChanges
+        case cancel
         var id: String {
             switch self {
             case .reject:         return "reject"
             case .requestChanges: return "requestChanges"
+            case .cancel:         return "cancel"
             }
         }
     }
+
+    /// FIX: confirmation alert for the close action. Close doesn't
+    /// capture a reason (delivered work is just being archived) — a
+    /// simple yes/no confirmation is enough.
+    @State private var showCloseConfirm = false
+
+    /// FIX (BV-MR-2026-0001): state for the View PDF preview sheet.
+    /// Holds the resolved local file URL (cache hit OR fresh download
+    /// from Supabase Storage). When non-nil the sheet is shown.
+    @State private var viewPDFURL: URL? = nil
+    @State private var isResolvingPDF = false
 
     init(request: MaterialRequest) {
         self.request = request
@@ -1015,20 +1037,60 @@ struct MRDetailView: View {
                             .background(Color.orange.opacity(0.08)).cornerRadius(8)
                     }
                     if local.status == .approved && store.canPerform(action: .materialRequestSendToSupplier) {
-                        // No supplier yet — give the user a clear next step
-                        // ("set a supplier so a PO can be drafted") rather
-                        // than a wall of disabled buttons.
-                        if local.supplierID == nil {
-                            HStack(alignment: .top, spacing: 8) {
-                                Image(systemName: "info.circle")
-                                    .foregroundColor(.orange)
-                                Text("Pick a supplier on this request to auto-draft a Purchase Order, or create one manually below.")
-                                    .font(.caption).foregroundColor(.secondary)
-                                Spacer()
+                        // Phase 7 follow-up fix (BV-MR-2026-0001): pre-fix
+                        // the supplier-warning text and the "Create
+                        // Purchase Order" button rendered as separate
+                        // items in the action stack. Users seeing
+                        // "or create one manually below" had to scan
+                        // past an Email button and (sometimes) Receive
+                        // / Edit / Delete buttons to find the Create PO
+                        // affordance — a real "I can't add it manually"
+                        // dead-end reported by a tester. Folding the
+                        // warning + the inline create button into one
+                        // visual unit removes the ambiguity.
+                        if local.supplierID == nil && local.purchaseOrderID == nil {
+                            VStack(alignment: .leading, spacing: 10) {
+                                HStack(alignment: .top, spacing: 8) {
+                                    Image(systemName: "info.circle")
+                                        .foregroundColor(.orange)
+                                    Text("No supplier set on this request.")
+                                        .font(.caption).foregroundColor(.primary)
+                                    Spacer()
+                                }
+                                Text("Pick a supplier to auto-draft a Purchase Order, or create the PO manually now.")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                // Two side-by-side actions so the user
+                                // sees both paths immediately without
+                                // scanning further down the action stack.
+                                HStack(spacing: 8) {
+                                    Button {
+                                        showCreateSupplier = true
+                                    } label: {
+                                        Label("Add Supplier", systemImage: "person.crop.rectangle.badge.plus")
+                                            .font(.subheadline)
+                                            .frame(maxWidth: .infinity)
+                                            .padding(.vertical, 10)
+                                            .background(Color.orange)
+                                            .foregroundColor(.white)
+                                            .cornerRadius(8)
+                                    }
+                                    Button {
+                                        showCreatePO = true
+                                    } label: {
+                                        Label("Create PO Manually", systemImage: "doc.badge.plus")
+                                            .font(.subheadline)
+                                            .frame(maxWidth: .infinity)
+                                            .padding(.vertical, 10)
+                                            .background(Color.purple)
+                                            .foregroundColor(.white)
+                                            .cornerRadius(8)
+                                    }
+                                }
                             }
-                            .padding(10)
+                            .padding(12)
                             .background(Color.orange.opacity(0.08))
-                            .cornerRadius(8)
+                            .cornerRadius(10)
                         }
                         // Email-to-supplier — only shown when a supplier with an
                         // email is set on the MR. The generator regenerates the
@@ -1049,15 +1111,32 @@ struct MRDetailView: View {
                                 }
                             }
                         }
-                        // The Create PO button is now only useful when no
-                        // PO got auto-drafted (supplier-less requests, or
-                        // legacy MRs approved before this automation
-                        // shipped). When auto-draft fired, the existing
-                        // "Linked PO" GroupBox above takes over.
-                        if local.purchaseOrderID == nil {
+                        // Fall-back Create PO button for the supplier-set
+                        // path. When supplier IS set but the auto-draft
+                        // didn't fire (legacy / re-approval / supplier
+                        // deleted), the user still needs a way to spawn
+                        // a PO manually.
+                        if local.supplierID != nil && local.purchaseOrderID == nil {
                             actionButton("Create Purchase Order", icon: "doc.badge.plus", color: .purple) {
                                 showCreatePO = true
                             }
+                        }
+                    }
+                    // FIX (BV-MR-2026-0001 follow-up): manual transition
+                    // from .approved → .ordered. Pre-fix the ONLY path
+                    // to .ordered was via "Email Approval to Supplier"
+                    // (which fires `markMaterialRequestOrdered` after
+                    // a successful send). For internal MRs, supplier-
+                    // less MRs, or orders placed by phone / in-person,
+                    // the user was stuck on .approved with no way to
+                    // progress to receive-on-site. This button gives
+                    // the manual escape hatch.
+                    if local.status == .approved
+                        && store.canPerform(action: .materialRequestSendToSupplier) {
+                        actionButton("Mark as Ordered", icon: "cart.fill", color: .cyan) {
+                            store.markMaterialRequestOrdered(local)
+                            ToastService.shared.success("Marked as ordered — Receive Items is now available.")
+                            refreshLocal()
                         }
                     }
                     if (local.status == .ordered || local.status == .partial) && store.canPerform(action: .materialRequestReceive) {
@@ -1065,11 +1144,91 @@ struct MRDetailView: View {
                             showReceiveSheet = true
                         }
                     }
+                    // FIX (BV-MR-2026-0001 follow-up): View PDF button —
+                    // shown when an approval PDF exists. Resolves the
+                    // pdf_storage_path via the generator (cache → fresh
+                    // Supabase Storage download) and opens a sheet
+                    // wrapping QuickLook for inline preview.
+                    #if canImport(UIKit)
+                    if let _ = local.pdfStoragePath, local.pdfGeneratedAt != nil {
+                        Button {
+                            Task {
+                                isResolvingPDF = true
+                                defer { isResolvingPDF = false }
+                                viewPDFURL = await MaterialRequestPDFGenerator.shared
+                                    .resolveViewableURL(for: local)
+                                if viewPDFURL == nil {
+                                    ToastService.shared.error("Couldn't load the approval PDF.")
+                                }
+                            }
+                        } label: {
+                            HStack {
+                                Image(systemName: isResolvingPDF ? "ellipsis.circle" : "doc.text.magnifyingglass")
+                                Text(isResolvingPDF ? "Loading PDF…" : "View Approval PDF")
+                            }
+                            .frame(maxWidth: .infinity).padding(.vertical, 12)
+                            .background(Color.indigo)
+                            .foregroundColor(.white)
+                            .cornerRadius(10)
+                        }
+                        .disabled(isResolvingPDF)
+                    }
+                    // Share / Save PDF — works regardless of supplier or
+                    // pdf_storage_path. Generates fresh if needed and
+                    // hands the URL to the system share sheet.
+                    if !local.lineItems.isEmpty,
+                       let pdfURL = MaterialRequestPDFGenerator.shared.prepareSharePDF(for: local, store: store) {
+                        ShareLink(item: pdfURL,
+                                  preview: SharePreview("\(local.requestNumber).pdf")) {
+                            Label("Share / Save PDF", systemImage: "square.and.arrow.up")
+                                .frame(maxWidth: .infinity).padding(.vertical, 12)
+                                .background(Color.blue)
+                                .foregroundColor(.white)
+                                .cornerRadius(10)
+                        }
+                    }
+                    #endif
                     if canEditByRole {
                         Button { showEdit = true } label: {
                             Label("Edit Request", systemImage: "pencil")
                                 .frame(maxWidth: .infinity).padding(.vertical, 12)
                                 .background(Color(.secondarySystemBackground))
+                                .cornerRadius(10)
+                        }
+                    }
+                    // FIX: explicit Close action for delivered MRs.
+                    // Closing moves the row to the archive state so it
+                    // disappears from active pipeline views. Pre-fix
+                    // there was no way to flip .delivered → .closed
+                    // manually; delivered MRs accumulated in the
+                    // pipeline forever.
+                    if local.status == .delivered && canDelete {
+                        Button {
+                            showCloseConfirm = true
+                        } label: {
+                            Label("Close Request", systemImage: "archivebox.fill")
+                                .frame(maxWidth: .infinity).padding(.vertical, 12)
+                                .background(Color.gray.opacity(0.85))
+                                .foregroundColor(.white)
+                                .cornerRadius(10)
+                        }
+                    }
+                    // FIX: cancel action for non-terminal states.
+                    // Captures a reason via the existing rejection
+                    // sheet (reused for cancel too). Allowed from
+                    // draft / submitted / approved / ordered / partial
+                    // — anything past .delivered is closed via the
+                    // Close button instead.
+                    if [.draft, .submitted, .approved, .ordered, .partial]
+                        .contains(local.status) && canDelete {
+                        Button {
+                            rejectReasonText = ""
+                            rejectReasonSheetMode = .cancel
+                        } label: {
+                            Label("Cancel Request", systemImage: "xmark.octagon.fill")
+                                .frame(maxWidth: .infinity).padding(.vertical, 12)
+                                .background(Color.red.opacity(0.15))
+                                .foregroundColor(.red)
                                 .cornerRadius(10)
                         }
                     }
@@ -1091,8 +1250,42 @@ struct MRDetailView: View {
         .sheet(isPresented: $showEdit, onDismiss: refreshLocal) {
             MRCreateEditView(request: local, preselectedProjectID: local.projectID)
         }
+        // FIX (BV-MR-2026-0001): "Add Supplier" opens the real
+        // SupplierCreateEditView sheet. On dismiss we look for the
+        // most-recently-created supplier and auto-attach it to this
+        // MR so the user lands back on a state where the auto-draft
+        // path is unblocked. Avoids the "I added a supplier but
+        // nothing changed" dead-end.
+        .sheet(isPresented: $showCreateSupplier, onDismiss: {
+            attachNewlyCreatedSupplier()
+        }) {
+            SupplierCreateEditView(supplier: nil)
+        }
+        // FIX (BV-MR-2026-0001): View PDF sheet. Bound to `viewPDFURL`
+        // so the sheet shows whenever the user taps View PDF AND the
+        // resolver successfully returned a local file URL. QuickLook
+        // handles inline preview, share, print, save-to-Files.
+        #if canImport(UIKit)
+        .sheet(item: Binding(
+            get: { viewPDFURL.map(IdentifiableURL.init) },
+            set: { viewPDFURL = $0?.url }
+        )) { wrapped in
+            QuickLookPreview(url: wrapped.url)
+        }
+        #endif
         .sheet(isPresented: $showCreatePO, onDismiss: refreshLocal) {
+            // Phase 7 follow-up bug fix (BV-MR-2026-0001): the PO sheet
+            // appeared not to scroll on iPhone — confirmed cause was a
+            // missing explicit detent + no interactive keyboard
+            // dismissal. Without explicit detents the sheet defaulted
+            // to .large but on devices with active keyboard avoidance
+            // the lower sections (Line Items, Notes, Tax) were clipped
+            // by the keyboard with no recovery gesture. The combo of
+            // .large detent + drag indicator + interactive keyboard
+            // dismiss inside the Form fixes it.
             POCreateEditView(po: newPOFromRequest())
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showReceiveSheet, onDismiss: refreshLocal) {
             ReceiveItemsSheet(entity: local) { quantities, photoPath in
@@ -1111,6 +1304,17 @@ struct MRDetailView: View {
             Button("Delete", role: .destructive) { store.deleteMaterialRequest(id: local.id); dismiss() }
             Button("Cancel", role: .cancel) {}
         } message: { Text("This cannot be undone.") }
+        // FIX: close-request confirmation. Closing is reversible only
+        // via direct DB edit (admins only), so we ask explicitly.
+        .alert("Close Request?", isPresented: $showCloseConfirm) {
+            Button("Close", role: .destructive) {
+                store.closeMaterialRequest(local)
+                refreshLocal()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This archives the request. The line items, delivery photo, and audit history stay intact.")
+        }
         .alert("Over budget", isPresented: $showBudgetAlert) {
             Button("Submit Anyway") { submitDespiteBudget() }
             Button("Cancel", role: .cancel) {}
@@ -1229,10 +1433,43 @@ struct MRDetailView: View {
         if let fresh = store.materialRequests.first(where: { $0.id == request.id }) { local = fresh }
     }
 
+    /// FIX (BV-MR-2026-0001): called on dismiss of the "Add Supplier"
+    /// sheet. Finds the most-recently-created supplier (heuristic: the
+    /// largest createdAt timestamp) and attaches it to the current MR
+    /// if the user didn't cancel. The attachment fires the regular
+    /// updateMaterialRequest path so the change pushes through sync,
+    /// which on next approval will let `createPODraftFromApprovedRequest`
+    /// fire automatically (since now supplierID is set).
+    ///
+    /// Guard: only attaches when (a) local.supplierID is still nil
+    /// (user didn't somehow set one in between) and (b) the candidate
+    /// supplier was created within the last 60 seconds. Avoids
+    /// accidentally attaching an old supplier on a no-op sheet
+    /// dismissal.
+    private func attachNewlyCreatedSupplier() {
+        guard local.supplierID == nil else { return }
+        let recent = store.suppliers
+            .filter { Date().timeIntervalSince($0.createdAt) < 60 }
+            .sorted { $0.createdAt > $1.createdAt }
+        guard let newest = recent.first else { return }
+        var updated = local
+        updated.supplierID = newest.id
+        updated.updatedAt  = Date()
+        updated.syncStatus = .pending
+        store.updateMaterialRequest(updated)
+        ToastService.shared.success("Supplier \(newest.name) attached.")
+        refreshLocal()
+    }
+
     private func newPOFromRequest() -> PurchaseOrder {
         var po = PurchaseOrder(poNumber: store.nextPONumber(), projectID: local.projectID)
         po.materialRequestID = local.id
         po.lineItems         = local.lineItems
+        // FIX (BV-MR-2026-0001): propagate the MR's opportunity onto
+        // the PO so server-side NOT NULL on purchase_orders.opportunity_id
+        // is satisfied. Without this the PO push fails silently and
+        // the user thinks "Create PO Manually" did nothing.
+        po.opportunityID     = local.opportunityID
         if let proj = local.projectID.flatMap({ pid in store.projects.first { $0.id == pid } }) {
             po.deliveryAddress = proj.siteAddress ?? ""
         }
@@ -1277,42 +1514,55 @@ struct MRDetailView: View {
     /// only the title / button copy / destination action differ.
     @ViewBuilder
     private func rejectReasonSheet(mode: RejectionMode) -> some View {
-        NavigationStack {
+        let prompt: String
+        let footerText: String
+        let title: String
+        let actionLabel: String
+        switch mode {
+        case .reject:
+            prompt = "Why is this being rejected?"
+            footerText = "Stored on the request. Visible in the audit history."
+            title = "Reject Request"
+            actionLabel = "Reject"
+        case .requestChanges:
+            prompt = "What needs to change?"
+            footerText = "The requester will see this when they reopen the request to edit."
+            title = "Request Changes"
+            actionLabel = "Send Back"
+        case .cancel:
+            prompt = "Why is this being cancelled?"
+            footerText = "Stored on the request. Cancellation is terminal — the request cannot be re-opened."
+            title = "Cancel Request"
+            actionLabel = "Cancel Request"
+        }
+        return NavigationStack {
             Form {
                 Section {
-                    TextField(
-                        mode == .reject
-                            ? "Why is this being rejected?"
-                            : "What needs to change?",
-                        text: $rejectReasonText,
-                        axis: .vertical
-                    )
-                    .lineLimit(4...8)
+                    TextField(prompt, text: $rejectReasonText, axis: .vertical)
+                        .lineLimit(4...8)
                 } footer: {
-                    Text(mode == .reject
-                        ? "Stored on the request. Visible in the audit history."
-                        : "The requester will see this when they reopen the request to edit.")
-                        .font(.caption2)
+                    Text(footerText).font(.caption2)
                 }
             }
-            .navigationTitle(mode == .reject ? "Reject Request" : "Request Changes")
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") { rejectReasonSheetMode = nil }
+                    Button("Dismiss") { rejectReasonSheetMode = nil }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button(mode == .reject ? "Reject" : "Send Back") {
+                    Button(actionLabel) {
                         let trimmed = rejectReasonText.trimmingCharacters(in: .whitespaces)
-                        // Both paths require a non-empty reason — without one
-                        // the audit row is useless and the requester can't
-                        // act on it.
+                        // All three paths require a non-empty reason —
+                        // without one the audit row is useless.
                         guard !trimmed.isEmpty else { return }
                         switch mode {
                         case .reject:
                             store.rejectMaterialRequest(local, reason: trimmed)
                         case .requestChanges:
                             store.requestChangesOnMaterialRequest(local, notes: trimmed)
+                        case .cancel:
+                            store.cancelMaterialRequest(local, reason: trimmed)
                         }
                         rejectReasonSheetMode = nil
                     }
@@ -1494,7 +1744,13 @@ struct MRCreateEditView: View {
     /// multi-page PDF to Supabase Storage on the request row. Optional —
     /// not in the validation gate.
     private var receiptScanSection: some View {
-        Section {
+        // FIX (debug audit): gate the scanner on
+        // VNDocumentCameraViewController.isSupported. Pre-fix the
+        // button was always shown — on Mac Catalyst without a usable
+        // camera (most desktops), tapping it opened a broken/empty
+        // VisionKit sheet. The scanner is iOS-only in practice.
+        let scannerAvailable = VNDocumentCameraViewController.isSupported
+        return Section {
             if isUploadingReceipt {
                 HStack {
                     ProgressView()
@@ -1505,27 +1761,36 @@ struct MRCreateEditView: View {
                     Label("Receipt attached", systemImage: "doc.text.fill")
                         .foregroundColor(.green)
                     Spacer()
-                    Button("Replace") { showDocumentScanner = true }
-                        .font(.caption)
+                    if scannerAvailable {
+                        Button("Replace") { showDocumentScanner = true }
+                            .font(.caption)
+                    }
                 }
                 Button(role: .destructive) {
                     receiptScanPath = nil
                 } label: {
                     Label("Remove", systemImage: "trash")
                 }
-            } else {
+            } else if scannerAvailable {
                 Button {
                     showDocumentScanner = true
                 } label: {
                     Label("Scan Receipt or Quote", systemImage: "doc.viewfinder")
                         .foregroundColor(.blue)
                 }
+            } else {
+                Label("Document scanner needs an iPhone-class camera. Attach a receipt PDF from another device instead.",
+                      systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         } header: {
             Text("Reference Document")
         } footer: {
-            Text("Scan a supplier receipt, quote, or hand-written list. Auto-detects edges and supports multi-page capture.")
-                .font(.caption2)
+            if scannerAvailable {
+                Text("Scan a supplier receipt, quote, or hand-written list. Auto-detects edges and supports multi-page capture.")
+                    .font(.caption2)
+            }
         }
     }
 
@@ -2215,15 +2480,20 @@ struct ReceiveItemsSheet: View {
 
     @State private var quantities: [UUID: Decimal]
 
-    // Photo state — selected by PhotosPicker, decoded into UIImage for the
-    // thumbnail, uploaded on Confirm. existingPhotoPath holds the URL
-    // already saved on the entity from a prior partial receive — so a
-    // receiver who's added the photo earlier doesn't have to re-upload
-    // to finalize.
+    // Photo state — settable from either the live camera or the photo
+    // library. existingPhotoPath holds the URL already saved on the
+    // entity from a prior partial receive — so a receiver who's added
+    // the photo earlier doesn't have to re-upload to finalize.
     @State private var photoItem: PhotosPickerItem? = nil
     @State private var photoImage: UIImage? = nil
     @State private var existingPhotoPath: String?
     @State private var isUploading = false
+    /// FIX (BV-MR-2026-0001 follow-up): toggles the live-camera
+    /// `UIImagePickerController` sheet for field workers who want to
+    /// shoot the delivery photo on the spot instead of digging
+    /// through the photo library. Hidden when the device has no
+    /// camera (most Macs / certain iPads).
+    @State private var showCamera = false
 
     init(entity: any ReceivableEntity,
          onConfirm: @escaping ([UUID: Decimal], String?) -> Void) {
@@ -2301,20 +2571,42 @@ struct ReceiveItemsSheet: View {
                     }
                 }
 
-                // Photo proof — required to flip to .delivered. PhotosPicker
-                // covers both the camera roll and (on iOS 17+) live capture
-                // via the system picker. No custom camera UI needed.
+                // Photo proof — required to flip to .delivered.
+                // FIX (BV-MR-2026-0001 follow-up): two side-by-side
+                // buttons. "Take Photo" launches the live camera via
+                // `CameraPicker`; "Choose from Library" launches the
+                // existing PhotosPicker for picking an existing image.
+                // Pre-fix only the library picker was available —
+                // PhotosPicker has no live-camera mode. Field crews
+                // receiving deliveries should be able to capture
+                // proof on the spot without leaving the app or
+                // switching to the Camera app and back.
                 Section {
-                    PhotosPicker(
-                        selection: $photoItem,
-                        matching: .images,
-                        photoLibrary: .shared()
-                    ) {
-                        Label(
-                            hasPhoto ? "Replace Photo" : "Attach Delivery Photo",
-                            systemImage: "camera.fill"
-                        )
-                        .foregroundColor(.blue)
+                    HStack(spacing: 10) {
+                        if CameraPicker.isAvailable {
+                            Button {
+                                showCamera = true
+                            } label: {
+                                Label("Take Photo", systemImage: "camera.fill")
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 10)
+                                    .background(Color.blue)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(8)
+                            }
+                        }
+                        PhotosPicker(
+                            selection: $photoItem,
+                            matching: .images,
+                            photoLibrary: .shared()
+                        ) {
+                            Label("Choose from Library", systemImage: "photo.on.rectangle")
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 10)
+                                .background(Color(.secondarySystemBackground))
+                                .foregroundColor(.primary)
+                                .cornerRadius(8)
+                        }
                     }
                     .onChange(of: photoItem) { item in
                         Task {
@@ -2370,6 +2662,17 @@ struct ReceiveItemsSheet: View {
                     Spacer()
                     Button("Done") {}
                 }
+            }
+            // FIX (BV-MR-2026-0001 follow-up): live camera capture.
+            // Full-screen cover (not a sheet) gives the camera its
+            // full viewport; matches how iOS apps typically launch
+            // the camera. Binding wraps `photoImage` so capturing a
+            // shot writes straight into the same state the
+            // PhotosPicker path uses — downstream save logic is
+            // unchanged.
+            .fullScreenCover(isPresented: $showCamera) {
+                CameraPicker(image: $photoImage)
+                    .ignoresSafeArea()
             }
         }
     }
@@ -2719,7 +3022,9 @@ struct POInvoiceMatchSheet: View {
     }
 
     private var scanSection: some View {
-        Section {
+        // FIX (debug audit): same scanner gate as MRCreateEditView.
+        let scannerAvailable = VNDocumentCameraViewController.isSupported
+        return Section {
             if isUploadingScan {
                 HStack {
                     ProgressView()
@@ -2730,21 +3035,30 @@ struct POInvoiceMatchSheet: View {
                     Label("Invoice attached", systemImage: "doc.text.fill")
                         .foregroundColor(.green)
                     Spacer()
-                    Button("Replace") { showScanner = true }.font(.caption)
+                    if scannerAvailable {
+                        Button("Replace") { showScanner = true }.font(.caption)
+                    }
                 }
-            } else {
+            } else if scannerAvailable {
                 Button {
                     showScanner = true
                 } label: {
                     Label("Scan Supplier Invoice", systemImage: "doc.viewfinder")
                         .foregroundColor(.blue)
                 }
+            } else {
+                Label("Invoice scanner needs an iPhone-class camera. Attach via another device, or proceed without — match data can still be entered manually.",
+                      systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
             }
         } header: {
             Text("Invoice Document")
         } footer: {
-            Text("Multi-page PDF stored on the PO. Optional but recommended for audit trail.")
-                .font(.caption2)
+            if scannerAvailable {
+                Text("Multi-page PDF stored on the PO. Optional but recommended for audit trail.")
+                    .font(.caption2)
+            }
         }
     }
 
@@ -2964,6 +3278,12 @@ struct PODetailView: View {
     @State private var isSendingToSupplier = false
     @State private var showReceiveSheet = false
     @State private var showInvoiceMatchSheet = false
+    /// FIX: close + cancel state for the action buttons added below.
+    /// Close uses a confirmation alert (no reason needed for archive);
+    /// cancel uses a reason-capture sheet (mirrors MR cancellation).
+    @State private var showCloseConfirm = false
+    @State private var showCancelSheet = false
+    @State private var cancelReasonText = ""
 
     init(po: PurchaseOrder) {
         self.po = po
@@ -3121,6 +3441,39 @@ struct PODetailView: View {
                                 .background(Color(.secondarySystemBackground)).cornerRadius(10)
                         }
                     }
+                    // FIX: Close PO. Available when status is .received
+                    // (invoice matched OR received-with-no-invoice-yet
+                    // both qualify). Closing archives the PO.
+                    if local.status == .received
+                        && [.officeAdmin, .manager, .executive].contains(store.currentUserRole) {
+                        Button {
+                            showCloseConfirm = true
+                        } label: {
+                            Label("Close PO", systemImage: "archivebox.fill")
+                                .frame(maxWidth: .infinity).padding(.vertical, 12)
+                                .background(Color.gray.opacity(0.85))
+                                .foregroundColor(.white)
+                                .cornerRadius(10)
+                        }
+                    }
+                    // FIX: Cancel PO. Allowed from any non-terminal
+                    // state. Captures a reason on the notes field so
+                    // the audit log + supplier-facing PDF reflect the
+                    // cancellation.
+                    if [.draft, .sent, .confirmed, .partial]
+                        .contains(local.status)
+                        && [.officeAdmin, .manager, .executive].contains(store.currentUserRole) {
+                        Button {
+                            cancelReasonText = ""
+                            showCancelSheet = true
+                        } label: {
+                            Label("Cancel PO", systemImage: "xmark.octagon.fill")
+                                .frame(maxWidth: .infinity).padding(.vertical, 12)
+                                .background(Color.red.opacity(0.15))
+                                .foregroundColor(.red)
+                                .cornerRadius(10)
+                        }
+                    }
                     if store.currentUserRole == .officeAdmin || store.currentUserRole == .manager || store.currentUserRole == .executive {
                         Button(role: .destructive) { showDeleteAlert = true } label: {
                             Label("Delete", systemImage: "trash")
@@ -3167,6 +3520,49 @@ struct PODetailView: View {
             Button("Delete", role: .destructive) { store.deletePurchaseOrder(id: local.id); dismiss() }
             Button("Cancel", role: .cancel) {}
         } message: { Text("This cannot be undone.") }
+        // FIX: Close PO confirmation alert.
+        .alert("Close PO?", isPresented: $showCloseConfirm) {
+            Button("Close", role: .destructive) {
+                store.closePurchaseOrder(local)
+                refreshLocal()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Archives this PO. Line items, delivery photo, and invoice match stay intact.")
+        }
+        // FIX: Cancel PO reason-capture sheet.
+        .sheet(isPresented: $showCancelSheet) {
+            NavigationStack {
+                Form {
+                    Section {
+                        TextField("Why is this PO being cancelled?",
+                                  text: $cancelReasonText, axis: .vertical)
+                            .lineLimit(4...8)
+                    } footer: {
+                        Text("Prepended to the PO's notes and visible in the audit history. Cancellation is terminal.")
+                            .font(.caption2)
+                    }
+                }
+                .navigationTitle("Cancel PO")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        Button("Dismiss") { showCancelSheet = false }
+                    }
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Cancel PO") {
+                            let trimmed = cancelReasonText.trimmingCharacters(in: .whitespaces)
+                            guard !trimmed.isEmpty else { return }
+                            store.cancelPurchaseOrder(local, reason: trimmed)
+                            showCancelSheet = false
+                            refreshLocal()
+                        }
+                        .bold()
+                        .disabled(cancelReasonText.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                }
+            }
+        }
         .onAppear { refreshLocal() }
     }
 
@@ -3254,7 +3650,21 @@ struct POCreateEditView: View {
         _status             = State(initialValue: po?.status ?? .draft)
     }
 
-    private var isNew: Bool { po == nil }
+    /// FIX (BV-MR-2026-0001 follow-up): `isNew` now checks store
+    /// membership instead of `po == nil`. Pre-fix the MR-driven flow
+    /// passed a freshly-built `newPOFromRequest()` PO into the init,
+    /// which made `po != nil`, so isNew was false and the Save path
+    /// routed to `updatePurchaseOrder()` — which silently no-ops when
+    /// the row doesn't exist in store yet. Net effect: user tapped
+    /// Save, sheet dismissed, no PO was ever created. Checking store
+    /// membership handles both call sites correctly:
+    ///   • Global "+" → po=nil → isNew=true → addPurchaseOrder
+    ///   • Edit existing → po=existing in store → isNew=false → updatePurchaseOrder
+    ///   • MR-spawned new → po=prefill NOT in store → isNew=true → addPurchaseOrder
+    private var isNew: Bool {
+        guard let p = po else { return true }
+        return !store.purchaseOrders.contains { $0.id == p.id }
+    }
     private var subtotal: Decimal { lineItems.reduce(0) { $0 + $1.totalCost } }
     private var taxAmount: Decimal { (subtotal * taxRate).rounded(scale: 2) }
     private var total: Decimal { subtotal + taxAmount }
@@ -3265,8 +3675,10 @@ struct POCreateEditView: View {
     /// post-terminal would shift booked AP balances and supplier
     /// performance metrics.
     /// Locked states: `.received`, `.closed`, `.cancelled` (per `isOpen`).
+    /// FIX (BV-MR-2026-0001): new POs are never locked, regardless of
+    /// their seed status, since they haven't been recorded yet.
     private var isLocked: Bool {
-        guard let p = po else { return false }
+        guard let p = po, !isNew else { return false }
         return !p.status.isOpen
     }
 
@@ -3306,6 +3718,13 @@ struct POCreateEditView: View {
                     }
                 }
             }
+            // Phase 7 follow-up bug fix (BV-MR-2026-0001): let the user
+            // drag the form to dismiss the keyboard. Without this,
+            // tapping a text field traps the keyboard up and Line
+            // Items / Notes / Tax sections sit behind it with no
+            // recovery gesture — the bug the user reported as
+            // "wont let me scroll down".
+            .scrollDismissesKeyboard(.interactively)
             .disabled(isLocked)
             .navigationTitle(isNew ? "New Purchase Order" : "Edit PO")
             .navigationBarTitleDisplayMode(.inline)
@@ -3439,7 +3858,30 @@ struct POCreateEditView: View {
         item.notes            = notes
         item.status           = status
         item.updatedAt        = Date()
+        // (item.opportunityID preserved from the source PO / newPOFromRequest;
+        // the save form intentionally doesn't expose it as an editable field.)
         isNew ? store.addPurchaseOrder(item) : store.updatePurchaseOrder(item)
+        // FIX (BV-MR-2026-0001 follow-up): user-visible confirmation
+        // that the action worked. Pre-fix the sheet dismissed silently
+        // and the user had no way to tell if the PO landed. Combined
+        // with the opportunity_id push fix, this also exposes any
+        // post-save sync error via a short-delay check against the
+        // store's per-row syncErrors map.
+        let savedID = item.id
+        let savedNumber = item.poNumber
+        ToastService.shared.success(isNew
+            ? "Purchase Order \(savedNumber) created."
+            : "Purchase Order \(savedNumber) updated.")
+        Task { @MainActor in
+            // Give the push a brief window to complete before we check
+            // syncErrors. A failed push lands in store.syncErrors[id]
+            // via the SyncErrorMapper path; if we find it, surface the
+            // user-readable reason on top of the success toast.
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            if let err = store.syncErrors[savedID] {
+                ToastService.shared.error("PO \(savedNumber) couldn't sync — \(err.reason)")
+            }
+        }
         dismiss()
     }
 
@@ -3789,4 +4231,13 @@ private struct IdentifiableIdx: Identifiable {
     let id: Int
     let value: Int
     init(value: Int) { self.id = value; self.value = value }
+}
+
+/// FIX (BV-MR-2026-0001): wrapper so a `URL` can drive a
+/// `.sheet(item:)` binding. SwiftUI requires the item to be
+/// Identifiable; URL is not. The url's string is stable enough to
+/// serve as the id for a single-sheet preview flow.
+struct IdentifiableURL: Identifiable {
+    let url: URL
+    var id: String { url.absoluteString }
 }

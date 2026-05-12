@@ -208,6 +208,7 @@ struct AddSiteAndSelectSheet: View {
                     }
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("New Site — \(client.name)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

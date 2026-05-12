@@ -887,6 +887,13 @@ struct SubContractCreateEditView: View {
     @Environment(\.dismiss) var dismiss
     var existing: SubContract? = nil
     let subcontractorID: UUID
+    /// Phase 7 / Decision 1 — project ID prefilled when this view is
+    /// launched from a project-scoped picker flow. Pre-fix the project
+    /// context was thrown away when entering from
+    /// `ProjectSubContractListView`, forcing the user to re-pick the
+    /// project they were already inside. Existing edit paths leave
+    /// this nil and rely on `existing.projectID` via populate().
+    var preselectedProjectID: UUID? = nil
 
     @State private var projectID: UUID? = nil
     @State private var scope        = ""
@@ -923,6 +930,12 @@ struct SubContractCreateEditView: View {
     }
 
     private func populate() {
+        // Apply preselected project (from picker) before edit-population
+        // so existing rows still override with their authoritative
+        // projectID on edit.
+        if existing == nil, projectID == nil {
+            projectID = preselectedProjectID
+        }
         guard let sc = existing else { return }
         projectID     = sc.projectID
         scope         = sc.scope
@@ -1134,7 +1147,7 @@ private struct ProjectSubContractStats: View {
 struct ProjectSubContractListView: View {
     @EnvironmentObject var store: AppStore
     let project: Project
-    @State private var showAdd = false
+    @State private var flow: SubContractCreateFlow? = nil
 
     private var contracts: [SubContract] {
         store.subContracts(for: project.id).sorted { $0.createdAt > $1.createdAt }
@@ -1158,12 +1171,42 @@ struct ProjectSubContractListView: View {
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
                 if store.currentUserRole.canManageSubcontractors {
-                    Button { showAdd = true } label: { Image(systemName: "plus") }
+                    Button { flow = .pickSubcontractor } label: { Image(systemName: "plus") }
                 }
             }
         }
-        .sheet(isPresented: $showAdd) {
-            SubContractCreateEditView(subcontractorID: UUID()) // placeholder — user picks project
+        // Phase 7 / Decision 1: project is already known from the
+        // outer ProjectDetailView. Pre-fix the toolbar `+` opened
+        // `SubContractCreateEditView(subcontractorID: UUID())` with
+        // a placeholder vendor ID — guaranteed orphan on push. New
+        // flow gates on the vendor pick first, then opens the create
+        // form with both `subcontractorID` AND `preselectedProjectID`
+        // already populated.
+        .sheet(item: $flow) { state in
+            switch state {
+            case .pickSubcontractor:
+                RequiredSubcontractorPickerSheet { picked in
+                    flow = .create(picked)
+                }
+                .environmentObject(store)
+            case .create(let subID):
+                SubContractCreateEditView(
+                    subcontractorID:        subID,
+                    preselectedProjectID:   project.id
+                )
+                .environmentObject(store)
+            }
+        }
+    }
+}
+
+private enum SubContractCreateFlow: Identifiable {
+    case pickSubcontractor
+    case create(UUID)
+    var id: String {
+        switch self {
+        case .pickSubcontractor:    return "pickSubcontractor"
+        case .create(let id):       return "create-\(id.uuidString)"
         }
     }
 }

@@ -29,6 +29,15 @@ struct FailedSyncDetailView: View {
 
     @State private var isRetrying = false
     @State private var showDiscardAllConfirm = false
+    /// True once the screen has been opened with at least one failed row.
+    /// Used to decide whether to auto-dismiss on an empty-state transition:
+    /// auto-dismiss happens only when the user clears the queue from
+    /// inside this screen, never when they navigated in and it was
+    /// already empty.
+    @State private var hadFailures = false
+    /// Holds the auto-dismiss task so we can cancel if the user re-fails
+    /// a record (rare race) or taps Done before the timer expires.
+    @State private var autoDismissTask: Task<Void, Never>?
 
     /// Snapshot of failed items grouped for display. Computed once on
     /// each render so we don't have to mutate state to filter.
@@ -44,6 +53,7 @@ struct FailedSyncDetailView: View {
                     label: (T) -> String,
                     id: (T) -> UUID,
                     syncStatus: (T) -> SyncStatus,
+                    parentIDs: (T) -> [UUID] = { _ in [] },
                     onRetry: @escaping (UUID) -> Void,
                     onDiscard: @escaping (UUID) -> Void)
         {
@@ -51,10 +61,11 @@ struct FailedSyncDetailView: View {
                 .filter { syncStatus($0) == .failed }
                 .map { item in
                     FailedRow(
-                        id:      id(item),
-                        label:   label(item),
-                        retry:   onRetry,
-                        discard: onDiscard
+                        id:        id(item),
+                        label:     label(item),
+                        parentIDs: parentIDs(item),
+                        retry:     onRetry,
+                        discard:   onDiscard
                     )
                 }
             if !rows.isEmpty {
@@ -80,6 +91,7 @@ struct FailedSyncDetailView: View {
                 return "\(proj) · \(entry.date.shortDate)"
             },
             id: { $0.id }, syncStatus: { $0.syncStatus },
+            parentIDs: { [$0.projectID] },
             onRetry: retry(\.scheduleEntries),
             onDiscard: discard(\.scheduleEntries))
         add(store.timesheetEntries, typeName: "Timesheets",
@@ -88,6 +100,7 @@ struct FailedSyncDetailView: View {
                 return "\(emp) · \(ts.date.shortDate) · \(ts.totalHours)h"
             },
             id: { $0.id }, syncStatus: { $0.syncStatus },
+            parentIDs: { [$0.employeeID, $0.projectID] },
             onRetry: retry(\.timesheetEntries),
             onDiscard: discard(\.timesheetEntries))
         add(store.invoices, typeName: "Invoices",
@@ -124,6 +137,7 @@ struct FailedSyncDetailView: View {
                 return "\(co.number) · \(proj)"
             },
             id: { $0.id }, syncStatus: { $0.syncStatus },
+            parentIDs: { [$0.projectID] },
             onRetry: retry(\.changeOrders),
             onDiscard: discard(\.changeOrders))
 
@@ -157,6 +171,7 @@ struct FailedSyncDetailView: View {
                 return "\(sc.contractNumber) · \(sub)"
             },
             id: { $0.id }, syncStatus: { $0.syncStatus },
+            parentIDs: { [$0.subcontractorID, $0.projectID] },
             onRetry: retry(\.subContracts),
             onDiscard: discard(\.subContracts))
 
@@ -166,6 +181,7 @@ struct FailedSyncDetailView: View {
                 return "\(proj) · \(pb.lines.count) lines"
             },
             id: { $0.id }, syncStatus: { $0.syncStatus },
+            parentIDs: { [$0.projectID] },
             onRetry: retry(\.projectBudgets),
             onDiscard: discard(\.projectBudgets))
 
@@ -175,6 +191,7 @@ struct FailedSyncDetailView: View {
                 return "\(inc.severity.rawValue.capitalized) · \(proj)"
             },
             id: { $0.id }, syncStatus: { $0.syncStatus },
+            parentIDs: { [$0.projectID].compactMap { $0 } },
             onRetry: retry(\.incidents),
             onDiscard: discard(\.incidents))
 
@@ -197,6 +214,7 @@ struct FailedSyncDetailView: View {
                 return "\(po.poNumber) · \(supp)"
             },
             id: { $0.id }, syncStatus: { $0.syncStatus },
+            parentIDs: { [$0.supplierID, $0.projectID, $0.materialRequestID].compactMap { $0 } },
             onRetry: retry(\.purchaseOrders),
             onDiscard: discard(\.purchaseOrders))
 
@@ -206,6 +224,7 @@ struct FailedSyncDetailView: View {
                 return "\(mr.requestNumber) · \(proj)"
             },
             id: { $0.id }, syncStatus: { $0.syncStatus },
+            parentIDs: { [$0.projectID, $0.supplierID].compactMap { $0 } },
             onRetry: retry(\.materialRequests),
             onDiscard: discard(\.materialRequests))
 
@@ -216,6 +235,7 @@ struct FailedSyncDetailView: View {
                 return title
             },
             id: { $0.id }, syncStatus: { $0.syncStatus },
+            parentIDs: { [$0.contractID] },
             onRetry: retry(\.contractClauses),
             onDiscard: discard(\.contractClauses))
 
@@ -224,12 +244,14 @@ struct FailedSyncDetailView: View {
                 "\(cm.title) · \(cm.milestoneDate.shortDate)"
             },
             id: { $0.id }, syncStatus: { $0.syncStatus },
+            parentIDs: { [$0.contractID] },
             onRetry: retry(\.contractMilestones),
             onDiscard: discard(\.contractMilestones))
 
         add(store.complianceDocuments, typeName: "Compliance Documents",
             label: { cd in cd.title },
             id: { $0.id }, syncStatus: { $0.syncStatus },
+            parentIDs: { [$0.contractID].compactMap { $0 } },
             onRetry: retry(\.complianceDocuments),
             onDiscard: discard(\.complianceDocuments))
 
@@ -238,6 +260,7 @@ struct FailedSyncDetailView: View {
                 "\(lw.waiverType.displayName) · \(lw.waiverFromName)"
             },
             id: { $0.id }, syncStatus: { $0.syncStatus },
+            parentIDs: { [$0.contractID].compactMap { $0 } },
             onRetry: retry(\.lienWaivers),
             onDiscard: discard(\.lienWaivers))
 
@@ -260,27 +283,52 @@ struct FailedSyncDetailView: View {
         add(store.crmContacts, typeName: "CRM Contacts",
             label: { c in c.fullName.isEmpty ? "Contact" : c.fullName },
             id: { $0.id }, syncStatus: { $0.syncStatus },
+            parentIDs: { c in [c.clientID] + [c.siteID].compactMap { $0 } },
             onRetry: retry(\.crmContacts),
             onDiscard: discard(\.crmContacts))
 
         add(store.crmOpportunities, typeName: "CRM Opportunities",
             label: { o in o.title },
             id: { $0.id }, syncStatus: { $0.syncStatus },
+            parentIDs: { o in
+                [o.clientID] +
+                [o.contactID, o.estimateID, o.quoteID, o.projectID].compactMap { $0 }
+            },
             onRetry: retry(\.crmOpportunities),
             onDiscard: discard(\.crmOpportunities))
 
         add(store.crmTasks, typeName: "CRM Tasks",
             label: { t in t.title },
             id: { $0.id }, syncStatus: { $0.syncStatus },
+            parentIDs: { t in
+                [t.clientID, t.contactID, t.opportunityID, t.quoteID, t.projectID]
+                    .compactMap { $0 }
+            },
             onRetry: retry(\.crmTasks),
             onDiscard: discard(\.crmTasks))
 
         add(store.crmActivities, typeName: "CRM Activities",
             label: { a in a.title },
             id: { $0.id }, syncStatus: { $0.syncStatus },
+            parentIDs: { a in
+                [a.clientID, a.contactID, a.opportunityID, a.quoteID, a.projectID]
+                    .compactMap { $0 }
+            },
             onRetry: retry(\.crmActivities),
             onDiscard: discard(\.crmActivities))
 
+        return out
+    }
+
+    /// Flat lookup of every failed row's label keyed by its UUID. Used
+    /// in `rowView` to resolve a row's `parentIDs` into a "Waiting on
+    /// _ParentName_" badge whenever any parent is itself in the failed
+    /// queue. Computed once per render from the same `groups` snapshot.
+    private var failedLookup: [UUID: String] {
+        var out: [UUID: String] = [:]
+        for g in groups {
+            for r in g.rows { out[r.id] = r.label }
+        }
         return out
     }
 
@@ -288,15 +336,11 @@ struct FailedSyncDetailView: View {
         NavigationStack {
             Group {
                 if groups.isEmpty {
-                    ContentUnavailableView(
-                        "All synced",
-                        systemImage: "checkmark.seal.fill",
-                        description: Text("No records are stuck. Pull-to-refresh on any list to confirm.")
-                    )
+                    emptyState
                 } else {
                     List {
                         Section {
-                            Text("These records couldn't push to the server. Most failures are RLS rejections (wrong role) or foreign-key violations (parent record missing). Retry to try again, or discard to remove from this device — discarded records are NOT on the server and can't be recovered.")
+                            Text("These records didn't save to the cloud. Tap Retry to try again, or swipe a row to discard.")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
                         }
@@ -325,12 +369,14 @@ struct FailedSyncDetailView: View {
                 }
             }
             .navigationTitle("Failed Syncs")
+            #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
-                ToolbarItem(placement: .navigationBarTrailing) {
+                ToolbarItem(placement: .primaryAction) {
                     if !groups.isEmpty {
                         Menu {
                             Button {
@@ -360,8 +406,60 @@ struct FailedSyncDetailView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("These records aren't on the server. Discarding deletes them from this device permanently.")
+                Text("These records aren't on the server. Discarding deletes them from this device permanently and can't be recovered.")
             }
+            .onAppear {
+                if !groups.isEmpty { hadFailures = true }
+            }
+            .onChange(of: groups.count) { newCount in
+                if newCount > 0 {
+                    hadFailures = true
+                    autoDismissTask?.cancel()
+                    autoDismissTask = nil
+                } else if hadFailures {
+                    scheduleAutoDismiss()
+                }
+            }
+            .onDisappear { autoDismissTask?.cancel() }
+        }
+    }
+
+    /// Polished empty state. When the user clears the queue from inside
+    /// this screen the auto-dismiss timer fires and we slide back out;
+    /// if they navigated in to a clean queue, this stays put so they
+    /// can confirm and leave on their own.
+    private var emptyState: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "checkmark.seal.fill")
+                .font(.system(size: 64))
+                .foregroundStyle(.green)
+                .symbolRenderingMode(.hierarchical)
+            Text("All caught up")
+                .font(.title2.weight(.semibold))
+            Text(hadFailures
+                 ? "Everything synced. Closing this screen…"
+                 : "No records are stuck. Pull-to-refresh on any list to confirm.")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+            if !hadFailures {
+                Button("Done") { dismiss() }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.top, 8)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Schedule a 1.5s dismiss after the queue is cleared. Cancellable
+    /// — if a new failure comes in during the window, we abort and
+    /// stay on screen so the user sees the new row.
+    private func scheduleAutoDismiss() {
+        autoDismissTask?.cancel()
+        autoDismissTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            if !Task.isCancelled && groups.isEmpty { dismiss() }
         }
     }
 
@@ -369,46 +467,82 @@ struct FailedSyncDetailView: View {
     private func rowView(_ row: FailedRow) -> some View {
         // Phase 2 Failed-Sync visibility: show the per-row error reason
         // (when sync engine populated `store.syncErrors` for this id)
-        // and a Copy Code button that pastes the raw error string for
-        // support handoff.
+        // plus a "Waiting on _Parent_" badge when this row's parent is
+        // also stuck in the queue. The inline Retry button is disabled
+        // while waiting since the same FK error will fire again.
         let info = store.syncErrors[row.id]
+        let blockingParents: [String] = row.parentIDs.compactMap { failedLookup[$0] }
 
-        VStack(alignment: .leading, spacing: 4) {
-            Text(row.label).font(.subheadline)
-            Text("ID \(row.id.uuidString.prefix(8))…")
-                .font(.caption2)
-                .fontDesign(.monospaced)
-                .foregroundColor(.secondary)
-            if let info {
-                HStack(alignment: .top, spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.caption2)
-                        .foregroundColor(.orange)
-                    Text(info.reason)
-                        .font(.caption)
-                        .foregroundColor(.primary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .padding(.top, 2)
-                if !info.code.isEmpty {
-                    HStack(spacing: 6) {
-                        Text("Code \(info.code)")
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(row.label).font(.subheadline)
+
+                if !blockingParents.isEmpty {
+                    HStack(alignment: .top, spacing: 4) {
+                        Image(systemName: "hourglass")
                             .font(.caption2)
-                            .fontDesign(.monospaced)
                             .foregroundColor(.secondary)
-                        Button {
-                            #if canImport(UIKit)
-                            UIPasteboard.general.string = "Code \(info.code)\n\n\(info.rawMessage)"
-                            ToastService.shared.success("Error code copied.")
-                            #endif
-                        } label: {
-                            Label("Copy Code", systemImage: "doc.on.doc")
-                                .font(.caption2)
-                        }
-                        .buttonStyle(.borderless)
+                        Text("Waiting on \(blockingParents.joined(separator: ", "))")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
+
+                if let info {
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.caption2)
+                            .foregroundColor(.orange)
+                        Text(info.reason)
+                            .font(.caption)
+                            .foregroundColor(.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.top, 2)
+                    if !info.code.isEmpty {
+                        HStack(spacing: 6) {
+                            Text("Code \(info.code)")
+                                .font(.caption2)
+                                .fontDesign(.monospaced)
+                                .foregroundColor(.secondary)
+                            Button {
+                                #if canImport(UIKit)
+                                UIPasteboard.general.string = "Code \(info.code)\n\n\(info.rawMessage)"
+                                ToastService.shared.success("Error code copied.")
+                                #endif
+                            } label: {
+                                Label("Copy Code", systemImage: "doc.on.doc")
+                                    .font(.caption2)
+                            }
+                            .buttonStyle(.borderless)
+                        }
+                    }
+                }
+
+                Text("ID \(row.id.uuidString.prefix(8))…")
+                    .font(.caption2)
+                    .fontDesign(.monospaced)
+                    .foregroundColor(.secondary)
+                    .padding(.top, 2)
             }
+
+            Spacer(minLength: 0)
+
+            // Inline Retry. Disabled when a parent is itself failed —
+            // retrying first would just produce the same FK rejection.
+            Button {
+                row.retry(row.id)
+                Task { await store.retryFailedSyncs() }
+            } label: {
+                Label("Retry", systemImage: "arrow.clockwise")
+                    .labelStyle(.titleAndIcon)
+                    .font(.caption.weight(.semibold))
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.mini)
+            .tint(.blue)
+            .disabled(!blockingParents.isEmpty)
         }
         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             Button(role: .destructive) {
@@ -481,10 +615,16 @@ private struct FailedGroup: Identifiable {
 }
 
 private struct FailedRow: Identifiable {
-    let id:      UUID
-    let label:   String
-    let retry:   (UUID) -> Void
-    let discard: (UUID) -> Void
+    let id:        UUID
+    let label:     String
+    /// IDs of parent records this row depends on (CRM client / opportunity,
+    /// project, supplier, etc.). When any of these IDs is ALSO in the
+    /// failed set, the row is "blocked" — retrying it before the parent
+    /// will just hit the same FK violation. The UI surfaces a "Waiting
+    /// on _ParentName_" badge and disables the inline Retry button.
+    let parentIDs: [UUID]
+    let retry:     (UUID) -> Void
+    let discard:   (UUID) -> Void
 }
 
 // MARK: - Syncable protocol
