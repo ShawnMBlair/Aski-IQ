@@ -1,7 +1,7 @@
 -- =========================================================
 -- EXPENSES v1 — EXP1: expenses table
 -- =========================================================
--- STATUS: DRAFT — NOT APPLIED
+-- STATUS: APPLIED to staging (hlkdgnsrisrnbyebezvh) + prod (uiwjvkutaezyismkjwxj) 2026-05-12
 -- Branch: claude/expenses-v1
 -- Spec: project_expenses_v1_spec.md (locked 2026-05-11)
 --

@@ -1,7 +1,7 @@
 -- =========================================================
 -- EXPENSES v1 — EXP2: expense_attachments table
 -- =========================================================
--- STATUS: DRAFT — NOT APPLIED
+-- STATUS: APPLIED to staging (hlkdgnsrisrnbyebezvh) + prod (uiwjvkutaezyismkjwxj) 2026-05-12
 -- Depends on: EXP1_expenses_table.sql (FK references public.expenses)
 --
 -- Receipt photos / PDFs attached to an expense row. v1 stores
