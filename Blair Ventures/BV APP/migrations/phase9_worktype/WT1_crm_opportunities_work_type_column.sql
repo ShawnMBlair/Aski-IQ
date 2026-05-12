@@ -1,7 +1,9 @@
 -- =========================================================
 -- OPPORTUNITY WORK TYPE v1.1 — WT1: work_type column
 -- =========================================================
--- STATUS: DRAFT — NOT APPLIED
+-- STATUS: APPLIED to staging + prod 2026-05-12 (this is the canonical
+-- form after WT1a aligned 'material_sales' → 'material_sale' to match
+-- the existing SaleType enum convention).
 -- Branch: claude/opportunity-worktype-v1 (off v1.0.0 at 9a86696)
 -- Spec:   project_opportunity_worktype_v1_1.md (locked Path A 2026-05-12)
 --
@@ -41,7 +43,7 @@ alter table public.crm_opportunities
         work_type in (
             'project_work',
             'service_work',
-            'material_sales',
+            'material_sale',
             'rental',
             'direct_invoice'
         )
@@ -65,7 +67,7 @@ update public.crm_opportunities
     set work_type = 'project_work'
     where work_type is null
        or work_type not in (
-           'project_work','service_work','material_sales',
+           'project_work','service_work','material_sale',
            'rental','direct_invoice'
        );
 

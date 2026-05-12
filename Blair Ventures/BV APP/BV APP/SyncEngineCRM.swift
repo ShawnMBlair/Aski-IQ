@@ -228,7 +228,7 @@ extension SyncEngine {
                 o.id              = id
                 o.title           = row.title
                 o.stage           = OpportunityStage(rawValue: row.stage) ?? .newLead
-                o.workType        = row.work_type.map { OpportunityWorkType.decoded(from: $0) } ?? .projectWork
+                o.workType        = row.work_type.map { SaleType.decoded(from: $0) } ?? .projectWork
                 o.value           = crmDecimal(row.value)
                 o.serviceType     = row.service_type ?? ""
                 o.siteAddress     = row.site_address ?? ""

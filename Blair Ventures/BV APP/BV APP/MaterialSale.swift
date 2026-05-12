@@ -60,6 +60,39 @@ enum SaleType: String, Codable, CaseIterable {
     var usesEstimateFlow: Bool {
         self == .projectWork || self == .serviceWork
     }
+
+    /// v1.1 — one-line description of where this work type routes
+    /// downstream once the opportunity converts. Surfaced in the New
+    /// Opportunity picker footer and the workTypeChanged audit log so
+    /// users understand the impact of their choice. v1.1 routing keeps
+    /// service_work and rental on the project flow as fallbacks until
+    /// their dedicated modules ship in v1.2.
+    var routingDescription: String {
+        switch self {
+        case .projectWork:
+            return "Opportunity → Estimate → Quote → Project → Progress Invoices"
+        case .serviceWork:
+            return "Opportunity → Work Order → Invoice (uses Project flow in v1.1)"
+        case .materialSale:
+            return "Opportunity → Material Sale → Quote/Order/Invoice"
+        case .rental:
+            return "Opportunity → Rental Record → Return Tracking → Invoice (uses Project flow in v1.1)"
+        case .directInvoice:
+            return "Opportunity → Invoice (skip Estimate + Quote)"
+        }
+    }
+
+    /// Forward-compat decode fallback. If the server one day returns a
+    /// 6th value (e.g. `equipment_lease`) iOS logs the unknown raw and
+    /// defaults to `.projectWork` rather than crashing. Same pattern
+    /// as UserRole's unknown-role handler.
+    static func decoded(from raw: String) -> SaleType {
+        if let known = SaleType(rawValue: raw) { return known }
+        #if DEBUG
+        print("⚠️ SaleType: unknown raw '\(raw)' — defaulting to projectWork")
+        #endif
+        return .projectWork
+    }
 }
 
 // MARK: - Material Sale Status

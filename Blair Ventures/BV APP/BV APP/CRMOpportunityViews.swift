@@ -856,7 +856,7 @@ private struct OpportunityDetailsSection: View {
                 // audit event in the parent save path.
                 FormRow {
                     Picker("Work Type", selection: $opp.workType) {
-                        ForEach(OpportunityWorkType.allCases) { wt in
+                        ForEach(SaleType.allCases, id: \.self) { wt in
                             Label(wt.displayName, systemImage: wt.icon).tag(wt)
                         }
                     }
@@ -1801,8 +1801,9 @@ struct CRMOpportunityCreateSheet: View {
     @State private var source: LeadSource = .directInquiry
     /// v1.1 — classification dimension that drives downstream routing.
     /// Distinct from serviceType (trade) above. Defaults to .projectWork
-    /// matching the WT1 column default.
-    @State private var workType: OpportunityWorkType = .projectWork
+    /// matching the WT1 column default. Type is `SaleType` (shared with
+    /// CommercialContext) — single source of truth across the app.
+    @State private var workType: SaleType = .projectWork
     @State private var notes: String = ""
     @State private var showValidationError: Bool = false
 
@@ -1842,7 +1843,7 @@ struct CRMOpportunityCreateSheet: View {
                 // Direct Invoice / Service / Rental).
                 Section {
                     Picker("Work Type", selection: $workType) {
-                        ForEach(OpportunityWorkType.allCases) { wt in
+                        ForEach(SaleType.allCases, id: \.self) { wt in
                             Label(wt.displayName, systemImage: wt.icon).tag(wt)
                         }
                     }
