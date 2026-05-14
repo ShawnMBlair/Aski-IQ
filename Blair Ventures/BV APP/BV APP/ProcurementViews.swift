@@ -651,7 +651,13 @@ struct MRDetailView: View {
     let request: MaterialRequest
     @State private var local: MaterialRequest
     @State private var showEdit = false
-    @State private var showCreatePO = false
+    /// B1.2 cutover (2026-05-14): the PO sheet now needs an async-resolved
+    /// PO number before opening. We pre-build the PO via `newPOFromRequest()`
+    /// (which awaits `resolvePONumber()`) and assign it here; the sheet
+    /// uses `.sheet(item: $preparedPO)` rather than `.sheet(isPresented:)`
+    /// so it opens once the async build completes. Replaces the prior
+    /// `@State private var showCreatePO = false`.
+    @State private var preparedPO: PurchaseOrder?
     /// FIX (BV-MR-2026-0001): "Add Supplier" must open the actual
     /// SupplierCreateEditView, not the MR editor. Pre-fix the button
     /// routed to `showEdit = true` which opened the MR editor — the
@@ -1076,7 +1082,9 @@ struct MRDetailView: View {
                                             .cornerRadius(8)
                                     }
                                     Button {
-                                        showCreatePO = true
+                                        Task { @MainActor in
+                                            preparedPO = await newPOFromRequest()
+                                        }
                                     } label: {
                                         Label("Create PO Manually", systemImage: "doc.badge.plus")
                                             .font(.subheadline)
@@ -1118,7 +1126,9 @@ struct MRDetailView: View {
                         // a PO manually.
                         if local.supplierID != nil && local.purchaseOrderID == nil {
                             actionButton("Create Purchase Order", icon: "doc.badge.plus", color: .purple) {
-                                showCreatePO = true
+                                Task { @MainActor in
+                                    preparedPO = await newPOFromRequest()
+                                }
                             }
                         }
                     }
@@ -1273,7 +1283,7 @@ struct MRDetailView: View {
             QuickLookPreview(url: wrapped.url)
         }
         #endif
-        .sheet(isPresented: $showCreatePO, onDismiss: refreshLocal) {
+        .sheet(item: $preparedPO, onDismiss: refreshLocal) { po in
             // Phase 7 follow-up bug fix (BV-MR-2026-0001): the PO sheet
             // appeared not to scroll on iPhone — confirmed cause was a
             // missing explicit detent + no interactive keyboard
@@ -1283,7 +1293,14 @@ struct MRDetailView: View {
             // by the keyboard with no recovery gesture. The combo of
             // .large detent + drag indicator + interactive keyboard
             // dismiss inside the Form fixes it.
-            POCreateEditView(po: newPOFromRequest())
+            //
+            // B1.2 cutover (2026-05-14): switched from
+            // `.sheet(isPresented: $showCreatePO)` to `.sheet(item: $preparedPO)`
+            // so the sheet only opens after `newPOFromRequest()` has
+            // resolved the PO number via the production RPC. `preparedPO`
+            // is set in the button-tap Task; setting it non-nil triggers
+            // the sheet automatically.
+            POCreateEditView(po: po)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
@@ -1461,8 +1478,13 @@ struct MRDetailView: View {
         refreshLocal()
     }
 
-    private func newPOFromRequest() -> PurchaseOrder {
-        var po = PurchaseOrder(poNumber: store.nextPONumber(), projectID: local.projectID)
+    /// B1.2 cutover (2026-05-14): PO number resolution is now async
+    /// (server-side RPC primary, legacy local fallback). This async
+    /// builder replaces the previous sync version that called
+    /// `store.nextPONumber()` directly.
+    private func newPOFromRequest() async -> PurchaseOrder {
+        let poNumber = await store.resolvePONumber()
+        var po = PurchaseOrder(poNumber: poNumber, projectID: local.projectID)
         po.materialRequestID = local.id
         po.lineItems         = local.lineItems
         // FIX (BV-MR-2026-0001): propagate the MR's opportunity onto
@@ -3743,8 +3765,14 @@ struct POCreateEditView: View {
                     }
                 }
             }
-            .onAppear {
-                if isNew && poNumber.isEmpty { poNumber = store.nextPONumber() }
+            // B1.2 cutover (2026-05-14): PO number resolution is now async.
+            // Use `.task` (cancelled on view dismissal) instead of `.onAppear`
+            // so the await on `store.resolvePONumber()` is structurally
+            // attached to the view's lifecycle.
+            .task {
+                if isNew && poNumber.isEmpty {
+                    poNumber = await store.resolvePONumber()
+                }
             }
             .sheet(isPresented: $showAddLine) {
                 MaterialLineItemEditSheet(item: nil) { lineItems.append($0) }

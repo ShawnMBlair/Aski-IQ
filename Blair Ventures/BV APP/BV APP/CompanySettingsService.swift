@@ -161,4 +161,26 @@ enum CompanySettingsService {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
     }
+
+    /// Atomic server-side purchase-order number generator. Calls the
+    /// `next_purchase_order_number(uuid)` RPC shipped as Wave B1.2 on
+    /// 2026-05-14. Same shape as `nextJobNumber` — the membership
+    /// check + counter UPSERT happen server-side inside the SECURITY
+    /// DEFINER function. Returns a formatted string like "BV-PO-2026-0008".
+    ///
+    /// Callers should resolve through `AppStore.resolvePONumber()` so
+    /// the legacy `nextPONumber()` fallback kicks in if this RPC
+    /// fails (offline, auth expired, transient error). The DB-side
+    /// `purchase_orders_company_po_number_unique` partial index is
+    /// the safety net during the fallback path.
+    static func nextPurchaseOrderNumber(companyID: UUID) async throws -> String {
+        struct Params: Encodable { let p_company_id: String }
+        let result = try await supabase
+            .rpc("next_purchase_order_number", params: Params(p_company_id: companyID.uuidString))
+            .execute()
+        let raw = String(data: result.data, encoding: .utf8) ?? ""
+        return raw
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+    }
 }
