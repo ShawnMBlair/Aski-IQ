@@ -3,6 +3,7 @@
 
 import Foundation
 import Combine
+import OSLog
 
 // MARK: - Enums
 
@@ -1473,6 +1474,12 @@ extension AppStore {
     /// Generate the next PO number. Same pattern as nextMaterialRequestNumber:
     /// max-of-existing-in-(company, year) + 1, not a raw count. See that
     /// method's doc comment for the rationale.
+    ///
+    /// LEGACY PATH — retained as fallback after B1.2 cutover (2026-05-14).
+    /// Primary path is now `nextPONumberServer()` → the production
+    /// `next_purchase_order_number` RPC. Callers should use
+    /// `resolvePONumber()` rather than calling this directly, so the
+    /// feature-flag and error-fallback logic stay centralized.
     func nextPONumber() -> String {
         let prefix = AppSettings.shared.companyPrefix.isEmpty ? "BV" : AppSettings.shared.companyPrefix
         let year   = Calendar.current.component(.year, from: Date())
@@ -1486,6 +1493,67 @@ extension AppStore {
             }
             .max() ?? 0
         return "\(yearPrefix)\(String(format: "%04d", highest + 1))"
+    }
+
+    // MARK: - B1.2 Server-side PO Numbering Cutover (2026-05-14)
+    //
+    // B1.2 shipped `next_purchase_order_number(uuid)` to production on
+    // 2026-05-14 08:59 MT. The function provides atomic per-(company,
+    // year) sequence allocation behind a SECURITY DEFINER membership
+    // check. Allocation is cross-device-safe.
+    //
+    // Migration strategy:
+    //   - `serverPONumberingEnabled` flag (AppSettings) defaults ON
+    //   - `resolvePONumber()` consults the flag and falls back to
+    //     local `nextPONumber()` if (a) flag is OFF or (b) RPC errors
+    //   - Legacy `nextPONumber()` stays for the soak window
+    //   - DB partial unique index `purchase_orders_company_po_number_unique`
+    //     catches any duplicate the fallback path might emit
+    //   - After ~2 weeks of clean operation, a follow-up commit retires
+    //     the fallback path entirely.
+
+    /// Server-side atomic PO number generator. Calls the production
+    /// `next_purchase_order_number(uuid)` RPC. Use via
+    /// `resolvePONumber()` rather than calling directly so the
+    /// feature-flag + error-fallback logic stays centralized.
+    @MainActor
+    func nextPONumberServer() async throws -> String {
+        guard let companyID = currentCompanyID else {
+            throw NSError(domain: "Procurement", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "No active company"])
+        }
+        return try await CompanySettingsService.nextPurchaseOrderNumber(companyID: companyID)
+    }
+
+    /// Resolve the next PO number for a new PO. Primary path is the
+    /// server-side RPC when `serverPONumberingEnabled` is true. Falls
+    /// back to local `nextPONumber()` if the flag is off OR the RPC
+    /// fails (network, auth, transient error). Each path is logged so
+    /// fallback frequency is observable.
+    @MainActor
+    func resolvePONumber() async -> String {
+        guard AppSettings.shared.serverPONumberingEnabled else {
+            let number = nextPONumber()
+            Logger(subsystem: "com.aski.iq", category: "PONumbering").info(
+                "PO number resolved via legacy path (flag off): \(number, privacy: .public)"
+            )
+            return number
+        }
+        do {
+            let start = Date()
+            let number = try await nextPONumberServer()
+            let ms = Int(Date().timeIntervalSince(start) * 1000)
+            Logger(subsystem: "com.aski.iq", category: "PONumbering").info(
+                "PO number resolved via RPC: \(number, privacy: .public) (latency=\(ms)ms)"
+            )
+            return number
+        } catch {
+            let number = nextPONumber()
+            Logger(subsystem: "com.aski.iq", category: "PONumbering").error(
+                "PO number RPC failed (\(error.localizedDescription, privacy: .public)); fell back to local. Number=\(number, privacy: .public)"
+            )
+            return number
+        }
     }
 
     // MARK: Supplier CRUD

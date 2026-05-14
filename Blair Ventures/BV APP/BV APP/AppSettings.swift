@@ -73,6 +73,39 @@ final class AppSettings: ObservableObject {
 
     @Published var annualRevenueTarget: Double = 0
 
+    // MARK: - PO Numbering Cutover Flag (B1.2)
+    //
+    // When true (default for the B1.2 cutover build, since B1.2 is live
+    // in production as of 2026-05-14), PO number generation flows through
+    // `CompanySettingsService.nextPurchaseOrderNumber` → the production
+    // `next_purchase_order_number(uuid)` RPC, providing atomic
+    // cross-device-safe allocation.
+    //
+    // When false, falls back to the legacy local `nextPONumber()`
+    // formula. The fallback path is also taken automatically if the RPC
+    // call fails (offline, auth expired, transient error). The DB-side
+    // partial unique index on (company_id, po_number) is the final
+    // safety net catching any collision the local fallback might
+    // accidentally produce.
+    //
+    // This flag is INTERNAL — not surfaced in user-facing settings UI.
+    // It exists for emergency revert during the cutover transition.
+    // Toggle via debug-build UI, remote-config push, or direct
+    // UserDefaults edit. After ~2 weeks of clean operation, the flag
+    // and the fallback path can be retired in a follow-up commit.
+    @Published var serverPONumberingEnabled: Bool = AppSettings.loadServerPONumberingDefault() {
+        didSet {
+            UserDefaults.standard.set(serverPONumberingEnabled, forKey: "ak_server_po_numbering_enabled")
+        }
+    }
+
+    private static func loadServerPONumberingDefault() -> Bool {
+        if UserDefaults.standard.object(forKey: "ak_server_po_numbering_enabled") == nil {
+            return true   // default ON in B1.2 cutover build
+        }
+        return UserDefaults.standard.bool(forKey: "ak_server_po_numbering_enabled")
+    }
+
     // MARK: - Scheduling tunables (Phase 1)
     //
     // Drive the new conflict-detection rules surfaced by
